@@ -373,7 +373,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}
-          path: $(pwd)/OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz
+          path: OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz
 
   macos:
     if : ${{ github.repository_owner == 'AcademySoftwareFoundation' }}

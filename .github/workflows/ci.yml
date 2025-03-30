@@ -338,7 +338,7 @@ jobs:
           tar -czf OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz -C $(pwd)/_install $(pwd)/
       
       - name: Upload Linux Build Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}
           path: $(pwd)/OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz
@@ -845,7 +845,7 @@ jobs:
           zip -r OpenRV-Windows-${{ matrix.build-type }}.zip $(pwd)/_install
       
       - name: Upload Windows Build Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: OpenRV-Windows-${{ matrix.build-type }}
           path: OpenRV-Windows-${{ matrix.build-type }}.zip

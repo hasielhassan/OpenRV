@@ -333,6 +333,17 @@ jobs:
         run: |
           cmake --install _build --prefix $(pwd)/_install --config ${{ matrix.build-type }}
 
+      - name: Package Linux Build Artifacts
+        run: |
+          # Create a tar.gz archive of the installed files
+          tar -czf OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz -C $(pwd)/_install $(pwd)/
+      
+      - name: Upload Linux Build Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}
+          path: $(pwd)/OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz
+
   macos:
     if : ${{ github.repository_owner == 'AcademySoftwareFoundation' }}
     name: '${{ matrix.os }} ${{ matrix.arch-type }} ${{ matrix.vfx-platform }}
@@ -829,3 +840,14 @@ jobs:
         run: |
           cmake --install _build --prefix $(pwd)/_install --config ${{ matrix.build-type }}
         shell: msys2 {0}
+
+      - name: Package Windows Build Artifacts
+        shell: msys2 {0}
+        run: |
+          zip -r OpenRV-Windows-${{ matrix.build-type }}.zip $(pwd)/_install
+      
+      - name: Upload Windows Build Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: OpenRV-Windows-${{ matrix.build-type }}
+          path: OpenRV-Windows-${{ matrix.build-type }}.zip

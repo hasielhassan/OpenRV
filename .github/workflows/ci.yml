@@ -58,6 +58,7 @@ jobs:
         - /opt/hostedtoolcache/CodeQL:/github/home/CodeQL
         - /usr/local/share/boost:/github/home/boost
         - /usr/lib/jvm:/github/home/powershell
+        - /usr/lib/jvm:/github/home/jvm
         - /usr/share/swift:/github/home/swift
         - /opt/hostedtoolcache:/github/home/hostedtoolcache
         - /swapfile:/github/home/swapfile
@@ -166,6 +167,7 @@ jobs:
           rm -rf /github/home/node_modules || true
           rm -rf /github/home/CodeQL || true
           rm -rf /github/home/boost || true
+          rm -rf /github/home/jvm || true
           rm -rf /github/home/swift || true
           rm -rf /github/home/hostedtoolcache || true
           rm -rf /github/home/swapfile || true
@@ -352,6 +354,7 @@ jobs:
           rm -rf /github/home/ghc || true
           rm -rf /github/home/.ghcup || true   
           rm -rf /github/home/powershell || true
+          rm -rf /github/home/jvm || true
           rm -rf /github/home/swift || true
           rm -rf /github/home/hostedtoolcache || true
           rm -rf /github/home/swapfile || true

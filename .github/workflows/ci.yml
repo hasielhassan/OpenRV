@@ -366,9 +366,8 @@ jobs:
 
       - name: Package Linux Build Artifacts
         run: |
-          # first try to make space
           # Create a tar.gz archive of the installed files
-          tar -czf OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz -C $(pwd)/_install $(pwd)/
+          tar -czf OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz -C _install .
       
       - name: Upload Linux Build Artifact
         uses: actions/upload-artifact@v4

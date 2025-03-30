@@ -57,6 +57,10 @@ jobs:
         - /usr/local/lib/node_modules:/github/home/node_modules
         - /opt/hostedtoolcache/CodeQL:/github/home/CodeQL
         - /usr/local/share/boost:/github/home/boost
+        - /usr/lib/jvm:/github/home/powershell
+        - /usr/share/swift:/github/home/swift
+        - /opt/hostedtoolcache:/github/home/hostedtoolcache
+        - /swapfile:/github/home/swapfile
     strategy:
       fail-fast: false
       matrix:
@@ -162,6 +166,9 @@ jobs:
           rm -rf /github/home/node_modules || true
           rm -rf /github/home/CodeQL || true
           rm -rf /github/home/boost || true
+          rm -rf /github/home/swift || true
+          rm -rf /github/home/hostedtoolcache || true
+          rm -rf /github/home/swapfile || true
 
       - name: Display disk space
         run: |
@@ -332,8 +339,31 @@ jobs:
         run: |
           cmake --install _build --prefix $(pwd)/_install --config ${{ matrix.build-type }}
 
+      - name: Display disk space
+        run: |
+          df -h /
+          
+      - name: Clear up some spaces on disk
+        run: |
+          # Delete files from host through the volumes
+          # It will have some "cannot remove" message, but but atleast 10GB will be cleared.
+          rm -rf /github/home/android || true
+          rm -rf /github/home/dotnet || true
+          rm -rf /github/home/ghc || true
+          rm -rf /github/home/.ghcup || true   
+          rm -rf /github/home/powershell || true
+          rm -rf /github/home/swift || true
+          rm -rf /github/home/hostedtoolcache || true
+          rm -rf /github/home/swapfile || true
+          rm -rf $(pwd)/_build || true
+
+      - name: Display disk space
+        run: |
+          df -h /
+
       - name: Package Linux Build Artifacts
         run: |
+          # first try to make space
           # Create a tar.gz archive of the installed files
           tar -czf OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.build-type }}.tar.gz -C $(pwd)/_install $(pwd)/
       

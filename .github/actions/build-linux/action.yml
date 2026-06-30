@@ -89,7 +89,22 @@ runs:
 
     - name: Install mesa-libOSMesa
       run: |
-        dnf install -y --enablerepo=${{ inputs.extra_repo }},devel mesa-libOSMesa mesa-libOSMesa-devel
+        # On Rocky 9.8+, mesa-libOSMesa was renamed to mesa-compat-libOSMesa
+        if ! dnf install -y mesa-libOSMesa mesa-libOSMesa-devel 2>/dev/null; then
+          echo "mesa-libOSMesa not found, trying mesa-compat-libOSMesa (Rocky 9.8+ rename)..."
+          dnf install -y mesa-compat-libOSMesa mesa-compat-libOSMesa-devel
+          # Create symlinks so CMake's FindOSMesa can find the library under its expected name
+          if [ -f /usr/lib64/libOSMesa.so ] || [ -L /usr/lib64/libOSMesa.so ]; then
+            echo "libOSMesa.so already exists"
+          else
+            # Find the compat library and create a symlink
+            COMPAT_LIB=$(find /usr/lib64 -name "libOSMesa*.so*" -type f | head -1)
+            if [ -n "$COMPAT_LIB" ]; then
+              ln -sf "$COMPAT_LIB" /usr/lib64/libOSMesa.so
+              echo "Created symlink: /usr/lib64/libOSMesa.so -> $COMPAT_LIB"
+            fi
+          fi
+        fi
       shell: bash
 
     - name: Install other system dependencies

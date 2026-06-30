@@ -167,6 +167,7 @@ all_mu_commands = [
     "theTime",
     "getIntProperty",
     "insertStringProperty",
+    "flushImageFBOs",
     "releaseAllCachedImages",
     "getFloatProperty",
     "sources",
@@ -177,6 +178,8 @@ all_mu_commands = [
     "ioParameters",
     "propertyInfo",
     "setPresentationMode",
+    "setPresentationDevice",
+    "loadSettingsIntoOptions",
     "optionsPlay",
     "addSource",
     "addSourceBegin",
@@ -300,7 +303,10 @@ all_mu_commands = [
     "getReleaseVariant",
     "isDebug",
     "setFilterLiveReviewEvents",
-    "filterLiveReviewEvents",
+    "enableEventCategory",
+    "disableEventCategory",
+    "isEventCategoryEnabled",
+    "setUIBlocked",
     "crash",
     "addSourceMediaRep",
     "setActiveSourceMediaRep",
@@ -310,6 +316,7 @@ all_mu_commands = [
     "sourceMediaRepSourceNode",
     "sourceMediaRepsAndNodes",
     "devicePixelRatio",
+    "waitForProgressiveLoading",
 ]
 
 
@@ -321,6 +328,9 @@ all_extra_commands = [
     "nodesInEvalPath",
     "setUIName",
     "displayFeedback2",
+    "displayFeedbackWithSizes",
+    "displayFeedbackQueue2",
+    "displayFeedbackQueueWithSizes",
     "inputNodeUserNameAtFrame",
     "sourceMetaInfoAtFrame",
     "sourceImageStructure",
@@ -451,7 +461,7 @@ def bind_symbols(symbol_list, module_name, mod):
         try:
             s = MuSymbol(module_name + "." + sym)
             setattr(mod, sym, s)
-        except:
+        except Exception:
             print("Bind to python failed:", sym)
 
 
@@ -459,7 +469,7 @@ def bind_constants(constant_list, mod):
     for const_pair in constant_list:
         try:
             setattr(mod, const_pair[0], const_pair[1])
-        except:
+        except Exception:
             print("Bind to python failed:", sym)
 
 
@@ -468,7 +478,31 @@ bind_symbols(all_extra_commands, "extra_commands", rv.extra_commands)
 bind_symbols(["eval"], "runtime", rv.runtime)
 bind_constants(commands_int_constants, rv.commands)
 
-rv.extra_commands.displayFeedback = rv.extra_commands.displayFeedback2
+
+# Python wrapper for displayFeedback to handle optional textSizes parameter
+# Note: Glyphs cannot be passed from Python as they are Mu function pointers
+def _displayFeedback_wrapper(text, duration, textSizes=None):
+    """Wrapper for displayFeedback that handles optional textSizes parameter."""
+    if textSizes is not None:
+        return rv.extra_commands.displayFeedbackWithSizes(text, duration, textSizes)
+    else:
+        return rv.extra_commands.displayFeedback2(text, duration)
+
+
+rv.extra_commands.displayFeedback = _displayFeedback_wrapper
+
+
+# Python wrapper for displayFeedbackQueue to handle optional textSizes parameter
+# Note: Glyphs cannot be passed from Python as they are Mu function pointers
+def _displayFeedbackQueue_wrapper(text, duration, textSizes=None):
+    """Wrapper for displayFeedbackQueue that handles optional textSizes parameter."""
+    if textSizes is not None:
+        return rv.extra_commands.displayFeedbackQueueWithSizes(text, duration, textSizes)
+    else:
+        return rv.extra_commands.displayFeedbackQueue2(text, duration)
+
+
+rv.extra_commands.displayFeedbackQueue = _displayFeedbackQueue_wrapper
 
 if "RV_NO_CONSOLE_REDIRECT" not in os.environ:
 

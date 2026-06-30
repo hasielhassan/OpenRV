@@ -114,6 +114,10 @@ SET(_shaders
     ColorCDLForACESLog
     ColorSMPTE240MLinear
     ColorLinearSMPTE240M
+    ColorSMPTE2084Linear
+    ColorLinearSMPTE2084
+    ColorHLGLinear
+    ColorLinearHLG
     ColorLuminanceLUT
     ColorOutOfRange
     InlineBoxResize
@@ -151,6 +155,7 @@ SET(_shaders
     ReverseDifference2
     ReverseDifference3
     ReverseDifference4
+    Dissolve2
     InlineDissolve2
     ColorCDL_SAT_noClamp
     ColorPremultLight
@@ -218,7 +223,7 @@ ADD_LIBRARY(
 
 # Need that with Qt6 since the code for this target does not support unicode correctly.
 IF(RV_TARGET_WINDOWS
-   AND RV_VFX_PLATFORM STREQUAL CY2024
+   AND RV_VFX_PLATFORM STRGREATER_EQUAL CY2024
 )
   QT_DISABLE_UNICODE_DEFINES(${_target})
 ENDIF()

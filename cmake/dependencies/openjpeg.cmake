@@ -10,11 +10,9 @@
 # Build instructions: https://github.com/uclouvain/openjpeg/blob/master/INSTALL.md
 #
 
-INCLUDE(ProcessorCount) # require CMake 3.15+
-PROCESSORCOUNT(_cpu_count)
-
 # version 2+ requires changes to IOjp2 project
-RV_CREATE_STANDARD_DEPS_VARIABLES("RV_DEPS_OPENJPEG" "2.5.0" "make" "")
+RV_CREATE_STANDARD_DEPS_VARIABLES("RV_DEPS_OPENJPEG" "${RV_DEPS_OPENJPEG_VERSION}" "make" "")
+
 IF(RV_TARGET_LINUX)
   # Overriding _lib_dir created in 'RV_CREATE_STANDARD_DEPS_VARIABLES' since this CMake-based project isn't using lib64
   SET(_lib_dir
@@ -27,21 +25,19 @@ SET(_download_url
     "https://github.com/uclouvain/openjpeg/archive/refs/tags/v${_version}.tar.gz"
 )
 SET(_download_hash
-    "5cbb822a1203dd75b85639da4f4ecaab"
+    ${RV_DEPS_OPENJPEG_DOWNLOAD_HASH}
 )
 
 IF(RV_TARGET_WINDOWS)
   RV_MAKE_STANDARD_LIB_NAME("openjp2" "" "SHARED" "")
 ELSE()
-  RV_MAKE_STANDARD_LIB_NAME("openjp2" "2.5.0" "SHARED" "")
+  RV_MAKE_STANDARD_LIB_NAME("openjp2" "${RV_DEPS_OPENJPEG_VERSION}" "SHARED" "")
 ENDIF()
-
 
 # The '_configure_options' list gets reset and initialized in 'RV_CREATE_STANDARD_DEPS_VARIABLES'
 
-# Do not build the executables (OpenJPEG calls them "codec executables"). 
-# BUILD_THIRDPARTY options is valid only if BUILD_CODEC=ON.
-# PNG, TIFF and ZLIB are not needed anymore because they are used for the executables only.
+# Do not build the executables (OpenJPEG calls them "codec executables"). BUILD_THIRDPARTY options is valid only if BUILD_CODEC=ON. PNG, TIFF and ZLIB are not
+# needed anymore because they are used for the executables only.
 LIST(APPEND _configure_options "-DBUILD_CODEC=OFF")
 
 EXTERNALPROJECT_ADD(
@@ -54,7 +50,7 @@ EXTERNALPROJECT_ADD(
   SOURCE_DIR ${_source_dir}
   BINARY_DIR ${_build_dir}
   INSTALL_DIR ${_install_dir}
-  DEPENDS ZLIB::ZLIB Tiff::Tiff PNG::PNG
+  DEPENDS ZLIB::ZLIB TIFF::TIFF PNG::PNG
   CONFIGURE_COMMAND ${CMAKE_COMMAND} ${_configure_options}
   BUILD_COMMAND ${_cmake_build_command}
   INSTALL_COMMAND ${_cmake_install_command}
@@ -64,39 +60,44 @@ EXTERNALPROJECT_ADD(
   USES_TERMINAL_BUILD TRUE
 )
 
-# The macro is using existing _target, _libname, _lib_dir and _bin_dir variabless
-RV_COPY_LIB_BIN_FOLDERS()
+RV_STAGE_DEPENDENCY_LIBS(TARGET ${_target} LIBNAME ${_libname})
 
-ADD_DEPENDENCIES(dependencies ${_target}-stage-target)
-
-ADD_LIBRARY(OpenJpeg::OpenJpeg SHARED IMPORTED GLOBAL)
-ADD_DEPENDENCIES(OpenJpeg::OpenJpeg ${_target})
-
-SET_PROPERTY(
-  TARGET OpenJpeg::OpenJpeg
-  PROPERTY IMPORTED_LOCATION ${_libpath}
+SET(_openjpeg_include_dir
+    "${_include_dir}/openjpeg-${_version_major}.${_version_minor}"
 )
 
 IF(RV_TARGET_WINDOWS)
-  SET_PROPERTY(
-    TARGET OpenJpeg::OpenJpeg
-    PROPERTY IMPORTED_IMPLIB ${_bin_dir}/${_implibname}
+  RV_ADD_IMPORTED_LIBRARY(
+    NAME
+    OpenJpeg::OpenJpeg
+    TYPE
+    SHARED
+    LOCATION
+    ${_libpath}
+    SONAME
+    ${_libname}
+    IMPLIB
+    ${_bin_dir}/${_implibname}
+    INCLUDE_DIRS
+    ${_openjpeg_include_dir}
+    DEPENDS
+    ${_target}
+    ADD_TO_DEPS_LIST
+  )
+ELSE()
+  RV_ADD_IMPORTED_LIBRARY(
+    NAME
+    OpenJpeg::OpenJpeg
+    TYPE
+    SHARED
+    LOCATION
+    ${_libpath}
+    SONAME
+    ${_libname}
+    INCLUDE_DIRS
+    ${_openjpeg_include_dir}
+    DEPENDS
+    ${_target}
+    ADD_TO_DEPS_LIST
   )
 ENDIF()
-
-SET_PROPERTY(
-  TARGET OpenJpeg::OpenJpeg
-  PROPERTY IMPORTED_SONAME ${_libname}
-)
-
-# It is required to force directory creation at configure time otherwise CMake complains about importing a non-existing path
-SET(_openjpeg_include_dir
-    "${_include_dir}/openjpeg-2.5"
-)
-FILE(MAKE_DIRECTORY "${_openjpeg_include_dir}")
-TARGET_INCLUDE_DIRECTORIES(
-  OpenJpeg::OpenJpeg
-  INTERFACE ${_openjpeg_include_dir}
-)
-
-LIST(APPEND RV_DEPS_LIST OpenJpeg::OpenJpeg)

@@ -55,41 +55,11 @@ namespace TwkUtil
         return wstr.to_bytes(wc);
     }
 
-#ifdef PLATFORM_WINDOWS
-    bool fileExistsWithLongPathSupport(const string& filePath)
-    {
-        // Convert the filepath to a wide string to accommodate all UTF-8
-        // characters
-        wstring wFilePath = to_wstring(filePath.c_str());
-        wstring extendedFilePath = L"\\\\?\\" + wFilePath;
+    int stat(const char* c, struct _stat64* buffer) { return _wstat64(to_wstring(c).c_str(), buffer); }
 
-        HANDLE fileHandle =
-            CreateFileW(extendedFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    FILE* fopen(const char* c, const char* mode) { return _wfopen(to_wstring(c).c_str(), to_wstring(mode).c_str()); }
 
-        if (fileHandle != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(fileHandle);
-            return true;
-        }
-        return false;
-    }
-#endif
-
-    int stat(const char* c, struct _stat64* buffer)
-    {
-        return _wstat64(to_wstring(c).c_str(), buffer);
-    }
-
-    FILE* fopen(const char* c, const char* mode)
-    {
-        return _wfopen(to_wstring(c).c_str(), to_wstring(mode).c_str());
-    }
-
-    int open(const char* c, int oflag)
-    {
-        return _wopen(to_wstring(c).c_str(), oflag);
-    }
+    int open(const char* c, int oflag) { return _wopen(to_wstring(c).c_str(), oflag); }
 
     int access(const char* path, int mode)
     {
@@ -205,14 +175,6 @@ namespace TwkUtil
         struct _stat64 statBuf;
 #else
         struct stat statBuf;
-#endif
-
-#ifdef PLATFORM_WINDOWS
-
-        string filePath = fname; // Casting to string
-        if (filePath.length() > 260)
-            return fileExistsWithLongPathSupport(filePath);
-
 #endif
 
         int status = TwkUtil::stat(fname, &statBuf);
@@ -439,9 +401,8 @@ namespace TwkUtil
         static const char opener = '{';
         static const char closer = '}';
         string tmpvar;
-        static const string allowable_chars =
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV"
-            "WXYZ0123456789_?"; // why a '?' ???
+        static const string allowable_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV"
+                                              "WXYZ0123456789_?"; // why a '?' ???
         char atc;
         posA = str.size() - 1;
         bool slashmode = false;
@@ -522,8 +483,7 @@ namespace TwkUtil
     }
 
     // *****************************************************************************
-    bool filesInDirectory(const char* directory, FileNameList& fileList,
-                          bool showDirs)
+    bool filesInDirectory(const char* directory, FileNameList& fileList, bool showDirs)
     {
         fileList.clear();
 
@@ -541,8 +501,7 @@ namespace TwkUtil
             wstring entry_name = find_data.cFileName;
             if (entry_name != L"." && entry_name != L"..")
             {
-                if (!showDirs
-                    && (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+                if (!showDirs && (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
                     continue;
                 fileList.push_back(to_utf8(entry_name.c_str()));
             }
@@ -569,8 +528,7 @@ namespace TwkUtil
     }
 
     // *****************************************************************************
-    bool filesInDirectory(const char* directory, const char* pattern,
-                          FileNameList& fileList, bool showDirs)
+    bool filesInDirectory(const char* directory, const char* pattern, FileNameList& fileList, bool showDirs)
     {
         fileList.clear();
 
@@ -587,8 +545,7 @@ namespace TwkUtil
             wstring entry_name = find_data.cFileName;
             if (entry_name != L"." && entry_name != L"..")
             {
-                if (!showDirs
-                    && (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+                if (!showDirs && (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
                     continue;
 
                 const auto filename = to_utf8(entry_name.c_str());
@@ -640,15 +597,9 @@ namespace TwkUtil
         return false;
     }
 
-    bool isReadable(const char* path)
-    {
-        return TwkUtil::access(path, R_OK) == 0;
-    }
+    bool isReadable(const char* path) { return TwkUtil::access(path, R_OK) == 0; }
 
-    bool isWritable(const char* path)
-    {
-        return TwkUtil::access(path, W_OK) == 0;
-    }
+    bool isWritable(const char* path) { return TwkUtil::access(path, W_OK) == 0; }
 
     //----------------------------------------------------------------------
     //  lexinumeric sort
@@ -685,8 +636,7 @@ namespace TwkUtil
 
     typedef std::vector<SplitNumberedString> SplitNumberedStrings;
 
-    bool lexinumericCompare(const SplitNumberedString& a,
-                            const SplitNumberedString& b)
+    bool lexinumericCompare(const SplitNumberedString& a, const SplitNumberedString& b)
     {
         const size_t n = min(a.parts.size(), b.parts.size());
 
@@ -719,8 +669,7 @@ namespace TwkUtil
         return false;
     }
 
-    void makeSplitNumberedStrings(const FileNameList& files,
-                                  SplitNumberedStrings& parts)
+    void makeSplitNumberedStrings(const FileNameList& files, SplitNumberedStrings& parts)
     {
         parts.resize(files.size());
 
@@ -784,13 +733,11 @@ namespace TwkUtil
         LPCTSTR lpDirectory = (directory.empty()) ? NULL : directory.c_str();
         int nShowCmd = SW_SHOWNA;
 
-        int result = (int)ShellExecute(hwnd, lpOperation, lpFile, lpParameters,
-                                       lpDirectory, nShowCmd);
+        int result = (int)ShellExecute(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShowCmd);
         return result;
     }
 
-    int copyAsAdministrator(std::string source, std::string destination,
-                            bool overwrite)
+    int copyAsAdministrator(std::string source, std::string destination, bool overwrite)
     {
         std::string copy("/c copy \"" + source + "\" \"" + destination + "\"");
 

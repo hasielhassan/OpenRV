@@ -1,5 +1,5 @@
 # *****************************************************************************
-# Copyright 2024 Autodesk, Inc. All rights reserved.
+# Copyright 2025 Autodesk, Inc. All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,7 +18,7 @@ is ready to be used.
 ```python
 Example:
 myObject = otio.schemadef.Paint.Paint(
-    name, points, rgba, type, brush, layer_range, visible
+    name, id, points, rgba, type, brush, layer_range, visible
 )
 """
 
@@ -29,21 +29,23 @@ import opentimelineio as otio
 class Paint(otio.core.SerializableObject):
     """A schema for the start of an annotation"""
 
-    _serializable_label = "Paint.1"
+    _serializable_label = "Paint.2"
     _name = "Paint"
 
     def __init__(
         self,
-        name: str = "",
-        points: list | None = None,
-        rgba: list | None = None,
+        id: str = "",
+        soft_deleted: bool | None = None,
+        points: list = [],
+        rgba: list = [],
         type: str = "",
         brush: str = "",
         layer_range: otio.opentime.TimeRange | None = None,
         visible: bool = True,
     ) -> None:
         super().__init__()
-        self.name = name
+        self.id = id
+        self.soft_deleted = soft_deleted
         self.points = points
         self.rgba = rgba
         self.type = type
@@ -51,9 +53,9 @@ class Paint(otio.core.SerializableObject):
         self.layer_range = layer_range
         self.visible = visible
 
-    name = otio.core.serializable_field(
-        "name", required_type=str, doc=("name: expects a string")
-    )
+    id = otio.core.serializable_field("id", required_type=str, doc=("name: expects a string"))
+
+    soft_deleted = otio.core.serializable_field("soft_deleted", required_type=bool, doc=("name: expects a bool"))
 
     _points = otio.core.serializable_field(
         "points", required_type=list, doc=("points: expects a list of point objects")
@@ -67,9 +69,7 @@ class Paint(otio.core.SerializableObject):
     def points(self, val: list):
         self._points = val
 
-    _rgba = otio.core.serializable_field(
-        "rgba", required_type=list, doc=("rgba: expects a list of four floats")
-    )
+    _rgba = otio.core.serializable_field("rgba", required_type=list, doc=("rgba: expects a list of four floats"))
 
     @property
     def rgba(self) -> list:
@@ -79,13 +79,9 @@ class Paint(otio.core.SerializableObject):
     def rgba(self, val: list) -> None:
         self._rgba = val
 
-    type = otio.core.serializable_field(
-        "type", required_type=str, doc=("type: expects a string")
-    )
+    type = otio.core.serializable_field("type", required_type=str, doc=("type: expects a string"))
 
-    brush = otio.core.serializable_field(
-        "brush", required_type=str, doc=("brush: expects a string")
-    )
+    brush = otio.core.serializable_field("brush", required_type=str, doc=("brush: expects a string"))
 
     _layer_range = otio.core.serializable_field(
         "layer_range",
@@ -101,19 +97,17 @@ class Paint(otio.core.SerializableObject):
     def layer_range(self, val):
         self._layer_range = val
 
-    visible = otio.core.serializable_field(
-        "visible", required_type=bool, doc=("visible: expects either true or false")
-    )
+    visible = otio.core.serializable_field("visible", required_type=bool, doc=("visible: expects either true or false"))
 
     def __str__(self) -> str:
         return (
-            f"Paint({self.name}, {self.points}, {self.rgba}, {self.type}, "
+            f"Paint({self.id}, {self.soft_deleted}, {self.points}, {self.rgba}, {self.type}, "
             f"{self.brush}, {self.layer_range}, {self.visible})"
         )
 
     def __repr__(self) -> str:
         return (
-            f"otio.schema.Paint(name={self.name!r}, points={self.points!r}, "
+            f"otio.schema.Paint(id={self.id!r}, soft_deleted={self.soft_deleted!r}, points={self.points!r}, "
             f"rgba={self.rgba!r}, type={self.type!r}, brush={self.brush!r}, "
             f"layer_range={self.layer_range!r}, visible={self.visible!r})"
         )

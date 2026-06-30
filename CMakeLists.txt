@@ -10,9 +10,11 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.27)
 # These variables are parsed by sphinx for the documentation. One-line formatting facilitates parsing and readability.
 # cmake-format: off
 SET(RV_MAJOR_VERSION "3" CACHE STRING "RV's version major")
-SET(RV_MINOR_VERSION "1" CACHE STRING "RV's version minor")
+SET(RV_MINOR_VERSION "2" CACHE STRING "RV's version minor")
 SET(RV_REVISION_NUMBER "0" CACHE STRING "RV's revision number")
 SET(RV_VERSION_YEAR "2025" CACHE STRING "RV's year of release.")
+SET(RV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE "aac;aac_at;aac_fixed;aac_latm;ac3;bink;binkaudio_dct;binkaudio_rdft;dnxhd;dvvideo;prores;prores_aw;prores_ks;prores_lgpl;qtrle;vp9;vp9_cuvid;vp9_mediacodec;vp9_qsv;vp9_rkmpp;vp9_v4l2m2m;hevc;mpeg2video;svq1;svq3" CACHE STRING "FFmpeg non-free decoders to enable")
+SET(RV_FFMPEG_NON_FREE_ENCODERS_TO_ENABLE "aac;aac_mf;dnxhd;dvvideo;prores;qtrle;vp9_qsv;vp9_vaapi" CACHE STRING "FFmpeg non-free encoders to enable")
 # cmake-format: on
 
 IF(NOT CMAKE_BUILD_TYPE)
@@ -91,6 +93,7 @@ SET(CMAKE_MODULE_PATH
 
 INCLUDE(rv_options) # RV's build options
 INCLUDE(rv_targets) # RV's build platform definitions
+INCLUDE(rv_compiler_cache) # RV's compiler cache (ccache/sccache) support
 INCLUDE(rv_globals) # RV's CMake-build global variables
 INCLUDE(rv_stage) # RV's local appplication packaging
 INCLUDE(rv_vfx)

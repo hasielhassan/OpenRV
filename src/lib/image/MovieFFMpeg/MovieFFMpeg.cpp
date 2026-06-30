@@ -31,6 +31,7 @@
 #include <set>
 #include <limits>
 #include <cmath>
+#include <mutex>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/thread/mutex.hpp>
@@ -57,8 +58,11 @@ extern "C"
 #include <libswscale/swscale.h>
 }
 
-static ENVVAR_BOOL(evUseUploadedMovieForStreaming,
-                   "RV_SHOTGRID_USE_UPLOADED_MOVIE_FOR_STREAMING", false);
+#if defined(RV_USE_APPLE_PRORES_SDK)
+#include <AppleProRes.h>
+#endif
+
+static ENVVAR_BOOL(evUseUploadedMovieForStreaming, "RV_SHOTGRID_USE_UPLOADED_MOVIE_FOR_STREAMING", false);
 
 namespace TwkMovie
 {
@@ -91,23 +95,21 @@ namespace TwkMovie
 #define DB_ALL 0xfff
 #define DB_LEVEL (DB_GENERAL | DB_MOST)
 
-#define DB(x)                                                                  \
-    if (DB_GENERAL & DB_LEVEL)                                                 \
-    {                                                                          \
-        stringstream msg;                                                      \
-        msg << "INFO [" << this << "," << setw(7) << setfill('0')              \
-            << this->m_dbline++ << setw(0) << "]: MovieFFMpeg: " << x << endl; \
-        cerr << msg.str();                                                     \
+#define DB(x)                                                                                                                        \
+    if (DB_GENERAL & DB_LEVEL)                                                                                                       \
+    {                                                                                                                                \
+        stringstream msg;                                                                                                            \
+        msg << "INFO [" << this << "," << setw(7) << setfill('0') << this->m_dbline++ << setw(0) << "]: MovieFFMpeg: " << x << endl; \
+        cerr << msg.str();                                                                                                           \
     }
 
-#define DBL(level, x)                                             \
-    if (level & DB_LEVEL)                                         \
-    {                                                             \
-        stringstream msg;                                         \
-        msg << "INFO [" << this << "," << setw(7) << setfill('0') \
-            << this->m_dbline++ << setw(0) << "," << level        \
-            << "]: MovieFFMpeg: " << x << endl;                   \
-        cerr << msg.str();                                        \
+#define DBL(level, x)                                                                                            \
+    if (level & DB_LEVEL)                                                                                        \
+    {                                                                                                            \
+        stringstream msg;                                                                                        \
+        msg << "INFO [" << this << "," << setw(7) << setfill('0') << this->m_dbline++ << setw(0) << "," << level \
+            << "]: MovieFFMpeg: " << x << endl;                                                                  \
+        cerr << msg.str();                                                                                       \
     }
 
 #else
@@ -161,8 +163,7 @@ namespace TwkMovie
         ~TimingDetails()
         {
             map<string, MovieTimer*>::iterator timerItr;
-            for (timerItr = m_timers.begin(); timerItr != m_timers.end();
-                 timerItr++)
+            for (timerItr = m_timers.begin(); timerItr != m_timers.end(); timerItr++)
             {
                 delete m_timers[timerItr->first];
             }
@@ -184,15 +185,11 @@ namespace TwkMovie
             ostringstream summary;
             summary << "timing summary (time/runs = avg) ";
             map<string, MovieTimer*>::iterator timerItr;
-            for (timerItr = m_timers.begin(); timerItr != m_timers.end();
-                 timerItr++)
+            for (timerItr = m_timers.begin(); timerItr != m_timers.end(); timerItr++)
             {
                 string name = timerItr->first;
-                summary << name << ": " << m_timers[name]->duration << " / "
-                        << m_timers[name]->runs << " = "
-                        << m_timers[name]->duration
-                               / float(m_timers[name]->runs)
-                        << " ";
+                summary << name << ": " << m_timers[name]->duration << " / " << m_timers[name]->runs << " = "
+                        << m_timers[name]->duration / float(m_timers[name]->runs) << " ";
             }
             return summary.str();
         };
@@ -287,6 +284,7 @@ namespace TwkMovie
             , imgConvertContext(0)
             , isOpen(false)
             , useOpenJPH(false)
+            , useAppleProRes(false)
             , rotate(false)
             , colrType("")
             , avCodecContext(0)
@@ -328,8 +326,12 @@ namespace TwkMovie
 
             name = t->name;
             useOpenJPH = t->useOpenJPH;
+            useAppleProRes = t->useAppleProRes;
             number = t->number;
             rotate = t->rotate;
+#if defined(RV_USE_APPLE_PRORES_SDK)
+            appleProResCtx = t->appleProResCtx;
+#endif
             return *this;
         }
 
@@ -340,6 +342,7 @@ namespace TwkMovie
         int lastDecodedVideo;
         int lastEncodedVideo;
         bool useOpenJPH;
+        bool useAppleProRes;
         set<int64_t> tsSet;
         FrameBuffer fb;
         struct SwsContext* imgConvertContext;
@@ -350,6 +353,9 @@ namespace TwkMovie
         string colrType;
         AVCodecContext* avCodecContext;
         struct HardwareContext hardwareContext;
+#if defined(RV_USE_APPLE_PRORES_SDK)
+        AppleProResContext appleProResCtx;
+#endif
     };
 
     //
@@ -451,8 +457,7 @@ namespace TwkMovie
 
         LockGuard lock(gcp.m_mutex);
 
-        ContextMap::iterator i =
-            gcp.m_contextMap.find(ContextKey(reader, streamIndex));
+        ContextMap::iterator i = gcp.m_contextMap.find(ContextKey(reader, streamIndex));
 
         if (i == gcp.m_contextMap.end())
             return;
@@ -468,8 +473,7 @@ namespace TwkMovie
         gcp.m_contextMap.erase(i);
     }
 
-    ContextPool::Reservation::Reservation(MovieFFMpegReader* reader,
-                                          int streamIndex)
+    ContextPool::Reservation::Reservation(MovieFFMpegReader* reader, int streamIndex)
         : m_context(0)
         , m_dbline(0)
         , m_dblline(0)
@@ -523,18 +527,14 @@ namespace TwkMovie
                 //  to front of list, but how do we ensure it never happens ?
                 //
 
-                cout << "ERROR: Attempted to reuse reserved context! ("
-                     << closeContext.reader->filename() << ")" << endl;
+                cout << "ERROR: Attempted to reuse reserved context! (" << closeContext.reader->filename() << ")" << endl;
             }
             else if (closeContext.avContext)
             {
-                DB("closing " << closeContext.reader << " "
-                              << closeContext.reader->filename() << ", stream "
-                              << closeContext.streamIndex << ", threads "
-                              << closeContext.avContext->thread_count << endl);
+                DB("closing " << closeContext.reader << " " << closeContext.reader->filename() << ", stream " << closeContext.streamIndex
+                              << ", threads " << closeContext.avContext->thread_count << endl);
 
-                gcp.m_currentOpenThreads -=
-                    closeContext.avContext->thread_count;
+                gcp.m_currentOpenThreads -= closeContext.avContext->thread_count;
 
                 avcodec_free_context(&closeContext.avContext);
 
@@ -576,11 +576,9 @@ namespace TwkMovie
 
         if (!context.avContext)
         {
-            AVStream* avStream =
-                context.reader->m_avFormatContext->streams[context.streamIndex];
+            AVStream* avStream = context.reader->m_avFormatContext->streams[context.streamIndex];
 
-            context.reader->trackFromStreamIndex(
-                context.streamIndex, context.vTrack, context.aTrack);
+            context.reader->trackFromStreamIndex(context.streamIndex, context.vTrack, context.aTrack);
             if (context.vTrack)
             {
                 context.avContext = context.vTrack->avCodecContext;
@@ -605,8 +603,7 @@ namespace TwkMovie
                 context.inOpenList = false;
             }
         }
-        else if (gcp.m_openContexts.empty()
-                 || gcp.m_openContexts.front() != &context)
+        else if (gcp.m_openContexts.empty() || gcp.m_openContexts.front() != &context)
         {
             if (context.inOpenList)
             //
@@ -669,6 +666,7 @@ namespace TwkMovie
                                                        "mp43"sv,
                                                        "mp4s"sv,
                                                        "mp4v"sv,
+                                                       "apv"sv,
                                                        "mpeg4"sv,
                                                        "mpg1"sv,
                                                        "mpg3"sv,
@@ -689,28 +687,23 @@ namespace TwkMovie
                                                        "xith"sv,
                                                        "xvid"sv,
                                                        "libdav1d"sv
-#if defined(RV_FFMPEG_USE_VIDEOTOOLBOX)
+#if defined(RV_FFMPEG_USE_VIDEOTOOLBOX) || defined(RV_USE_APPLE_PRORES_SDK)
                                                        ,
                                                        "prores"sv
 #endif
         };
 
-        const char* supportedEncodingCodecsArray[] = {
-            "dvvideo", "libx264", "mjpeg", "pcm_s16be", "rawvideo", 0};
+        const char* supportedEncodingCodecsArray[] = {"dvvideo", "libx264", "mjpeg", "pcm_s16be", "rawvideo", 0};
 
-        const char* metadataFieldsArray[] = {
-            "album",    "album_artist", "artist",      "author",  "comment",
-            "composer", "copyright",    "description", "encoder", "episode_id",
-            "genre",    "grouping",     "lyrics",      "network", "rotate",
-            "show",     "synopsis",     "title",       "track",   "year",
-            0};
+        const char* metadataFieldsArray[] = {"album",       "album_artist", "artist",     "author", "comment",  "composer", "copyright",
+                                             "description", "encoder",      "episode_id", "genre",  "grouping", "lyrics",   "network",
+                                             "rotate",      "show",         "synopsis",   "title",  "track",    "year",     0};
 
-        const char* ignoreMetadataFieldsArray[] = {
-            "major_brand", "minor_version", "compatible_brands", "handler_name",
-            "vendor_id", "language",
-            "duration", // We ignore it here, since its explicitly added
-                        // elsewhere.
-            0};
+        const char* ignoreMetadataFieldsArray[] = {"major_brand", "minor_version", "compatible_brands", "handler_name", "vendor_id",
+                                                   "language",
+                                                   "duration", // We ignore it here, since its explicitly added
+                                                               // elsewhere.
+                                                   0};
 
         //----------------------------------------------------------------------
         //
@@ -727,20 +720,15 @@ namespace TwkMovie
 
         void avLogCallback(void* ptr, int level, const char* fmt, va_list vargs)
         {
-            if ((string(fmt).substr(0, 51)
-                 == "Encoder did not produce proper pts, making some up.")
-                || (string(fmt).substr(0, 47)
-                    == "No accelerated colorspace conversion found from")
+            if ((string(fmt).substr(0, 51) == "Encoder did not produce proper pts, making some up.")
+                || (string(fmt).substr(0, 47) == "No accelerated colorspace conversion found from")
                 || (string(fmt).substr(0, 28) == "Increasing reorder buffer to")
-                || (string(fmt).substr(0, 34)
-                    == "sample aspect ratio already set to")
+                || (string(fmt).substr(0, 34) == "sample aspect ratio already set to")
                 || (string(fmt).substr(0, 67)
                     == "deprecated pixel format used, make sure you did set "
                        "range correctly")
-                || (string(fmt).substr(0, 20) == "overread end of atom")
-                || (string(fmt).substr(0, 19) == "Timecode frame rate")
-                || (string(fmt).substr(0, 32)
-                    == "unsupported color_parameter_type"))
+                || (string(fmt).substr(0, 20) == "overread end of atom") || (string(fmt).substr(0, 19) == "Timecode frame rate")
+                || (string(fmt).substr(0, 32) == "unsupported color_parameter_type"))
             {
                 return;
             }
@@ -773,29 +761,23 @@ namespace TwkMovie
         bool codecHasSlowAccess(string name)
         {
             boost::algorithm::to_lower(name);
-            return std::any_of(
-                slowRandomAccessCodecs.begin(), slowRandomAccessCodecs.end(),
-                [&name](const auto& codec) { return codec == name; });
+            return std::any_of(slowRandomAccessCodecs.begin(), slowRandomAccessCodecs.end(),
+                               [&name](const auto& codec) { return codec == name; });
         }
 
         bool isMP4format(AVFormatContext* avFormatContext)
         {
-            return avFormatContext != nullptr
-                   && avFormatContext->iformat != nullptr
-                   && avFormatContext->iformat->name != nullptr
+            return avFormatContext != nullptr && avFormatContext->iformat != nullptr && avFormatContext->iformat->name != nullptr
                    && strstr(avFormatContext->iformat->name, "mp4") != nullptr;
         }
 
         bool isMOVformat(AVFormatContext* avFormatContext)
         {
-            return avFormatContext != nullptr
-                   && avFormatContext->iformat != nullptr
-                   && avFormatContext->iformat->name != nullptr
+            return avFormatContext != nullptr && avFormatContext->iformat != nullptr && avFormatContext->iformat->name != nullptr
                    && strstr(avFormatContext->iformat->name, "mov") != nullptr;
         }
 
-        int64_t findBestTS(int64_t goalTS, double frameDur, VideoTrack* track,
-                           bool finalPacket)
+        int64_t findBestTS(int64_t goalTS, double frameDur, VideoTrack* track, bool finalPacket)
         {
             //
             //  The timestamps we have collected from unordered packets give us
@@ -811,18 +793,14 @@ namespace TwkMovie
 
             int64_t smallest = -1;
             map<int64_t, int64_t> diffs;
-            for (set<int64_t>::iterator ts = track->tsSet.begin();
-                 ts != track->tsSet.end(); ts++)
+            for (set<int64_t>::iterator ts = track->tsSet.begin(); ts != track->tsSet.end(); ts++)
             {
                 int64_t diff = abs(goalTS - *ts);
                 if (diff < smallest || smallest == -1)
                     smallest = diff;
                 diffs[diff] = *ts;
             }
-            return (smallest != -1
-                    && (smallest < (frameDur * 0.5) || finalPacket))
-                       ? diffs[smallest]
-                       : goalTS;
+            return (smallest != -1 && (smallest < (frameDur * 0.5) || finalPacket)) ? diffs[smallest] : goalTS;
         }
 
         bool fpsEquals(double& fps, double f)
@@ -845,9 +823,8 @@ namespace TwkMovie
             const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(native);
             int bitSize = desc->comp[0].depth - desc->comp[0].shift;
             bool hasAlpha = true; //(desc->flags & AV_PIX_FMT_FLAG_ALPHA);
-            return (hasAlpha)
-                       ? ((bitSize > 8) ? AV_PIX_FMT_RGBA64 : AV_PIX_FMT_RGBA)
-                       : ((bitSize > 8) ? AV_PIX_FMT_RGB48 : AV_PIX_FMT_RGB24);
+            return (hasAlpha) ? ((bitSize > 8) ? AV_PIX_FMT_RGBA64 : AV_PIX_FMT_RGBA)
+                              : ((bitSize > 8) ? AV_PIX_FMT_RGB48 : AV_PIX_FMT_RGB24);
         }
 
         AVPixelFormat getBestRVFormat(AVPixelFormat native)
@@ -879,8 +856,7 @@ namespace TwkMovie
                 }
                 else if (bitSize < 8)
                 {
-                    best =
-                        (hasAlpha) ? AV_PIX_FMT_YUVA444P : AV_PIX_FMT_YUV444P;
+                    best = (hasAlpha) ? AV_PIX_FMT_YUVA444P : AV_PIX_FMT_YUV444P;
                 }
                 else if (bitSize > 8)
                 {
@@ -892,28 +868,23 @@ namespace TwkMovie
                     switch (hfourcc)
                     {
                     case 0:
-                        best = (hasAlpha) ? AV_PIX_FMT_YUVA420P16
-                                          : AV_PIX_FMT_YUV420P16;
+                        best = (hasAlpha) ? AV_PIX_FMT_YUVA420P16 : AV_PIX_FMT_YUV420P16;
                         break;
                     case 1:
                     case 2:
-                        best = (hasAlpha) ? AV_PIX_FMT_YUVA422P16
-                                          : AV_PIX_FMT_YUV422P16;
+                        best = (hasAlpha) ? AV_PIX_FMT_YUVA422P16 : AV_PIX_FMT_YUV422P16;
                         break;
                     case 4:
                     default:
-                        best = (hasAlpha) ? AV_PIX_FMT_YUVA444P16
-                                          : AV_PIX_FMT_YUV444P16;
+                        best = (hasAlpha) ? AV_PIX_FMT_YUVA444P16 : AV_PIX_FMT_YUV444P16;
                         break;
                     }
                 }
             }
             else // Everything else
             {
-                best =
-                    (hasAlpha)
-                        ? ((bitSize > 8) ? AV_PIX_FMT_RGBA64 : AV_PIX_FMT_RGBA)
-                        : ((bitSize > 8) ? AV_PIX_FMT_RGB48 : AV_PIX_FMT_RGB24);
+                best = (hasAlpha) ? ((bitSize > 8) ? AV_PIX_FMT_RGBA64 : AV_PIX_FMT_RGBA)
+                                  : ((bitSize > 8) ? AV_PIX_FMT_RGB48 : AV_PIX_FMT_RGB24);
             }
 
             return best;
@@ -964,24 +935,18 @@ namespace TwkMovie
             }
         }
 
-        void validateTimestamps(AVPacket* pkt, AVStream* stm,
-                                AVCodecContext* context, int64_t frameCount,
-                                bool isAudio = false)
+        void validateTimestamps(AVPacket* pkt, AVStream* stm, AVCodecContext* context, int64_t frameCount, bool isAudio = false)
 
         {
-            if (pkt->pts == AV_NOPTS_VALUE && !isAudio
-                && !(context->codec->capabilities & AV_CODEC_CAP_DELAY))
+            if (pkt->pts == AV_NOPTS_VALUE && !isAudio && !(context->codec->capabilities & AV_CODEC_CAP_DELAY))
                 pkt->pts = frameCount;
 
             if (pkt->pts != AV_NOPTS_VALUE)
-                pkt->pts =
-                    av_rescale_q(pkt->pts, context->time_base, stm->time_base);
+                pkt->pts = av_rescale_q(pkt->pts, context->time_base, stm->time_base);
             if (pkt->dts != AV_NOPTS_VALUE)
-                pkt->dts =
-                    av_rescale_q(pkt->dts, context->time_base, stm->time_base);
+                pkt->dts = av_rescale_q(pkt->dts, context->time_base, stm->time_base);
             if (pkt->duration > 0 && isAudio)
-                pkt->duration = av_rescale_q(pkt->duration, context->time_base,
-                                             stm->time_base);
+                pkt->duration = av_rescale_q(pkt->duration, context->time_base, stm->time_base);
 
             // Video AVPacket's duration needs to be initialized starting with
             // FFmpeg 4.4.3 as the automatic computing of the frame duration
@@ -990,13 +955,11 @@ namespace TwkMovie
             // slightly higher (incorrect) frame rate.
             if (pkt->duration == 0 && !isAudio)
             {
-                pkt->duration =
-                    av_rescale_q(1, context->time_base, stm->time_base);
+                pkt->duration = av_rescale_q(1, context->time_base, stm->time_base);
             }
         }
 
-        void copyImage(AVFrame* dst, const AVFrame* src,
-                       const AVPixelFormat pix_fmt, int width, int height)
+        void copyImage(AVFrame* dst, const AVFrame* src, const AVPixelFormat pix_fmt, int width, int height)
         {
             HOP_PROF_FUNC();
 
@@ -1021,12 +984,10 @@ namespace TwkMovie
                     for (int i = 0; i < planes_nb; i++)
                     {
                         int h = height;
-                        ptrdiff_t bwidth =
-                            av_image_get_linesize(pix_fmt, width, i);
+                        ptrdiff_t bwidth = av_image_get_linesize(pix_fmt, width, i);
                         if (bwidth < 0)
                         {
-                            av_log(NULL, AV_LOG_ERROR,
-                                   "av_image_get_linesize failed\n");
+                            av_log(NULL, AV_LOG_ERROR, "av_image_get_linesize failed\n");
                             return;
                         }
                         if (i == 1 || i == 2)
@@ -1039,11 +1000,9 @@ namespace TwkMovie
             }
         }
 
-        int hardwareDecoderInit(AVCodecContext* codecContext,
-                                const AVHWDeviceType deviceType)
+        int hardwareDecoderInit(AVCodecContext* codecContext, const AVHWDeviceType deviceType)
         {
-            HardwareContext* hardwareContext =
-                static_cast<HardwareContext*>(codecContext->opaque);
+            HardwareContext* hardwareContext = static_cast<HardwareContext*>(codecContext->opaque);
             if (hardwareContext == nullptr)
             {
                 return -1;
@@ -1051,8 +1010,7 @@ namespace TwkMovie
 
             AVBufferRef* hardwareDeviceContext = hardwareContext->deviceContext;
 
-            const int result = av_hwdevice_ctx_create(
-                &hardwareDeviceContext, deviceType, nullptr, nullptr, 0);
+            const int result = av_hwdevice_ctx_create(&hardwareDeviceContext, deviceType, nullptr, nullptr, 0);
 
             if (result < 0)
             {
@@ -1066,19 +1024,15 @@ namespace TwkMovie
             return result;
         }
 
-        AVPixelFormat getHardwareFormat(AVCodecContext* codecContext,
-                                        const AVPixelFormat* pixelFormats)
+        AVPixelFormat getHardwareFormat(AVCodecContext* codecContext, const AVPixelFormat* pixelFormats)
         {
-            HardwareContext* hardwareContext =
-                static_cast<HardwareContext*>(codecContext->opaque);
+            HardwareContext* hardwareContext = static_cast<HardwareContext*>(codecContext->opaque);
             if (hardwareContext != nullptr)
             {
                 const enum AVPixelFormat* pixelFormat = nullptr;
-                AVPixelFormat hardwarePixelFormat =
-                    hardwareContext->pixelFormat;
+                AVPixelFormat hardwarePixelFormat = hardwareContext->pixelFormat;
 
-                for (pixelFormat = pixelFormats; *pixelFormat != -1;
-                     pixelFormat++)
+                for (pixelFormat = pixelFormats; *pixelFormat != -1; pixelFormat++)
                 {
                     if (*pixelFormat == hardwarePixelFormat)
                     {
@@ -1092,12 +1046,9 @@ namespace TwkMovie
         }
 
 #if defined(RV_FFMPEG_USE_VIDEOTOOLBOX)
-        bool videoToolboxInit(const AVCodec* avCodec,
-                              AVCodecContext** avCodecContext,
-                              HardwareContext* hardwareContext)
+        bool videoToolboxInit(const AVCodec* avCodec, AVCodecContext** avCodecContext, HardwareContext* hardwareContext)
         {
-            if (avCodec == nullptr || avCodecContext == nullptr
-                || *avCodecContext == nullptr || hardwareContext == nullptr)
+            if (avCodec == nullptr || avCodecContext == nullptr || *avCodecContext == nullptr || hardwareContext == nullptr)
             {
                 std::cerr << "ERROR: MovieFFMpeg: Invalid codec or context\n";
                 return false;
@@ -1106,37 +1057,31 @@ namespace TwkMovie
             // Check if the ProRes codec is supported by the hardware decoder
             if (avCodec->id == AV_CODEC_ID_PRORES)
             {
-                if (!VTIsHardwareDecodeSupported(
-                        kCMVideoCodecType_AppleProRes4444)
-                    || !VTIsHardwareDecodeSupported(
-                        kCMVideoCodecType_AppleProRes422))
+                if (!VTIsHardwareDecodeSupported(kCMVideoCodecType_AppleProRes4444)
+                    || !VTIsHardwareDecodeSupported(kCMVideoCodecType_AppleProRes422))
                 {
                     return false;
                 }
             }
 
-            const AVHWDeviceType deviceType =
-                av_hwdevice_find_type_by_name("videotoolbox");
+            const AVHWDeviceType deviceType = av_hwdevice_find_type_by_name("videotoolbox");
             if (deviceType == AV_HWDEVICE_TYPE_NONE)
             {
-                std::cerr << "ERROR: Device type" << deviceType
-                          << "is not supported.\n";
+                std::cerr << "ERROR: Device type" << deviceType << "is not supported.\n";
                 return false;
             }
 
             const AVCodecHWConfig* config = avcodec_get_hw_config(avCodec, 0);
             if (config == nullptr)
             {
-                std::cerr << "ERROR: Decoder " << avCodec->name
-                          << " does not support device type "
-                          << av_hwdevice_get_type_name(deviceType) << '\n';
+                std::cerr << "ERROR: Decoder " << avCodec->name << " does not support device type " << av_hwdevice_get_type_name(deviceType)
+                          << '\n';
                 return false;
             }
 
             // Check if the hardware device context flag is set and the device
             // type matches
-            if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0
-                && config->device_type == deviceType)
+            if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0 && config->device_type == deviceType)
             {
                 hardwareContext->pixelFormat = config->pix_fmt;
             }
@@ -1230,8 +1175,7 @@ namespace TwkMovie
         }
         m_videoTracks.resize(0);
 
-        for (map<int, int>::iterator i = m_subtitleMap.begin();
-             i != m_subtitleMap.end(); ++i)
+        for (map<int, int>::iterator i = m_subtitleMap.begin(); i != m_subtitleMap.end(); ++i)
         {
             if (i->second)
                 ContextPool::flushContext(this, i->first);
@@ -1262,27 +1206,22 @@ namespace TwkMovie
             // required.
             if (m_info.audioChannels != m_audioState->channels)
             {
-                initChannelsMap(m_info.audioChannels, m_audioState->channels,
-                                m_audioState->chmap);
+                initChannelsMap(m_info.audioChannels, m_audioState->channels, m_audioState->chmap);
             }
         }
         else
         {
             m_audioState->channelsPerTrack = m_audioTracks[0]->numChannels;
-            m_audioState->channels = layoutChannels(
-                channelLayouts(m_audioState->channelsPerTrack).front());
+            m_audioState->channels = layoutChannels(channelLayouts(m_audioState->channelsPerTrack).front());
             ;
             // No chmap required here since in/out channels are identical
             // because this plugin is set to not do any audio channels
             // conversion.
         }
 
-        DBL(DB_AUDIO,
-            "audioConfigure! -- "
-                << m_filename << " layout: " << m_audioState->layout
-                << " mapSize: " << m_audioState->chmap.size()
-                << " trkChans: " << m_audioState->channels.size()
-                << " chansPerTrk: " << m_audioState->channelsPerTrack);
+        DBL(DB_AUDIO, "audioConfigure! -- " << m_filename << " layout: " << m_audioState->layout
+                                            << " mapSize: " << m_audioState->chmap.size() << " trkChans: " << m_audioState->channels.size()
+                                            << " chansPerTrk: " << m_audioState->channelsPerTrack);
     }
 
     bool MovieFFMpegReader::canConvertAudioChannels() const
@@ -1320,8 +1259,7 @@ namespace TwkMovie
         return mov;
     }
 
-    void MovieFFMpegReader::preloadOpen(const std::string& filename,
-                                        const ReadRequest& request)
+    void MovieFFMpegReader::preloadOpen(const std::string& filename, const ReadRequest& request)
     {
         m_filename = filename;
         m_request = request;
@@ -1337,8 +1275,7 @@ namespace TwkMovie
         }
     }
 
-    void MovieFFMpegReader::postPreloadOpen(const MovieInfo& info,
-                                            const ReadRequest& request)
+    void MovieFFMpegReader::postPreloadOpen(const MovieInfo& info, const ReadRequest& request)
     {
         m_info = info;
         m_request = request;
@@ -1353,22 +1290,18 @@ namespace TwkMovie
         initializeAll();
 
 #if DB_TIMING & DB_LEVEL
-        double initializeAllDuration =
-            m_timingDetails->pauseTimer("initializeAll");
-        DBL(DB_TIMING, "file: " << m_filename
-                                << " initializeAll: " << initializeAllDuration);
+        double initializeAllDuration = m_timingDetails->pauseTimer("initializeAll");
+        DBL(DB_TIMING, "file: " << m_filename << " initializeAll: " << initializeAllDuration);
 #endif
     }
 
     bool MovieFFMpegReader::openAVFormat()
     {
         const bool filepathIsURL = TwkUtil::pathIsURL(m_filename);
-        const bool fileExists =
-            !filepathIsURL && TwkUtil::fileExists(m_filename.c_str());
+        const bool fileExists = !filepathIsURL && TwkUtil::fileExists(m_filename.c_str());
         if (!filepathIsURL && !fileExists)
         {
-            TWK_THROW_EXC_STREAM("Could not locate '" << m_filename
-                                                      << "' on disk.");
+            TWK_THROW_EXC_STREAM("Could not locate '" << m_filename << "' on disk.");
         }
 
         // Make sure ffmpeg treats files on disk as files
@@ -1405,18 +1338,14 @@ namespace TwkMovie
         }
 
         // Open the file
-        const int ret = avformat_open_input(&m_avFormatContext,
-                                            safe_path.c_str(), 0, &fmtOptions);
+        const int ret = avformat_open_input(&m_avFormatContext, safe_path.c_str(), 0, &fmtOptions);
         if (ret != 0)
-            TWK_THROW_EXC_STREAM("Failed to open "
-                                 << m_filename
-                                 << " for reading: " << avErr2Str(ret));
+            TWK_THROW_EXC_STREAM("Failed to open " << m_filename << " for reading: " << avErr2Str(ret));
 
         return true;
     }
 
-    void MovieFFMpegReader::trackFromStreamIndex(int index, VideoTrack*& vTrack,
-                                                 AudioTrack*& aTrack)
+    void MovieFFMpegReader::trackFromStreamIndex(int index, VideoTrack*& vTrack, AudioTrack*& aTrack)
     {
         vTrack = 0;
         aTrack = 0;
@@ -1444,9 +1373,7 @@ namespace TwkMovie
         //
     }
 
-    bool MovieFFMpegReader::openAVCodec(int index,
-                                        AVCodecContext** avCodecContext,
-                                        HardwareContext* hardwareContext)
+    bool MovieFFMpegReader::openAVCodec(int index, AVCodecContext** avCodecContext, HardwareContext* hardwareContext)
     {
         // Make sure the format is opened
         if (m_avFormatContext == nullptr)
@@ -1482,27 +1409,21 @@ namespace TwkMovie
 
         if (avCodec == nullptr)
         {
-            std::cerr << "ERROR: MovieFFMpeg: Unsupported codec_id '"
-                      << avStream->codecpar->codec_id << "' in " << m_filename
-                      << '\n';
+            std::cerr << "ERROR: MovieFFMpeg: Unsupported codec_id '" << avStream->codecpar->codec_id << "' in " << m_filename << '\n';
             return false;
         }
 
         *avCodecContext = avcodec_alloc_context3(avCodec);
         if (*avCodecContext == nullptr)
         {
-            std::cerr
-                << "ERROR: MovieFFMpeg: Failed to allocate codec context '"
-                << avCodec->name << "' for " << m_filename << '\n';
+            std::cerr << "ERROR: MovieFFMpeg: Failed to allocate codec context '" << avCodec->name << "' for " << m_filename << '\n';
             return false;
         }
 
         // Copy codec parameters from input stream to output codec context
-        if (avcodec_parameters_to_context(*avCodecContext, avStream->codecpar)
-            < 0)
+        if (avcodec_parameters_to_context(*avCodecContext, avStream->codecpar) < 0)
         {
-            std::cerr << "ERROR: MovieFFMpeg: Failed to copy '" << avCodec->name
-                      << "' codec parameters to decoder context for "
+            std::cerr << "ERROR: MovieFFMpeg: Failed to copy '" << avCodec->name << "' codec parameters to decoder context for "
                       << m_filename << '\n';
             avcodec_free_context(avCodecContext);
             return false;
@@ -1513,14 +1434,14 @@ namespace TwkMovie
         {
             if (!videoToolboxInit(avCodec, avCodecContext, hardwareContext))
             {
-                static bool hasDisplayedError = false;
-                if (!hasDisplayedError)
-                {
-                    std::cout << "WARNING: Hardware decoder is not available "
-                                 "or failed to intialize."
-                              << std::endl;
-                    hasDisplayedError = true;
-                }
+                static std::once_flag warnOnce;
+                std::call_once(warnOnce,
+                               []()
+                               {
+                                   std::cout << "WARNING: Hardware decoder is not available "
+                                                "or failed to intialize."
+                                             << std::endl;
+                               });
             }
         }
 #endif
@@ -1529,8 +1450,7 @@ namespace TwkMovie
         (*avCodecContext)->thread_count = m_io->codecThreads();
         if (avcodec_open2(*avCodecContext, avCodec, nullptr) < 0)
         {
-            std::cerr << "ERROR: MovieFFMpeg: Failed to open codec '"
-                      << avCodec->name << "' for " << m_filename << '\n';
+            std::cerr << "ERROR: MovieFFMpeg: Failed to open codec '" << avCodec->name << "' for " << m_filename << '\n';
             avcodec_free_context(avCodecContext);
             return false;
         }
@@ -1542,8 +1462,7 @@ namespace TwkMovie
             const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(nativeFormat);
             if (desc == nullptr)
             {
-                std::cerr << "ERROR: MovieFFMpeg: Invalid pixel format! "
-                          << m_filename << '\n';
+                std::cerr << "ERROR: MovieFFMpeg: Invalid pixel format! " << m_filename << '\n';
                 avcodec_free_context(avCodecContext);
                 return false;
             }
@@ -1572,9 +1491,7 @@ namespace TwkMovie
         // Make sure to only use allowed codecs
         if (!m_io->codecIsAllowed((*avCodecContext)->codec->name, true))
         {
-            std::cerr << "ERROR: MovieFFMpeg: Unallowed codec '"
-                      << (*avCodecContext)->codec->name << "' in " << m_filename
-                      << '\n';
+            std::cerr << "ERROR: MovieFFMpeg: Unallowed codec '" << (*avCodecContext)->codec->name << "' in " << m_filename << '\n';
             avcodec_free_context(avCodecContext);
             return false;
         }
@@ -1582,8 +1499,7 @@ namespace TwkMovie
         return true;
     }
 
-    void MovieFFMpegReader::populateTimecodeMetadata(
-        const AVDictionaryEntry* tcEntry, const AVTimecode& avTimecode)
+    void MovieFFMpegReader::populateTimecodeMetadata(const AVDictionaryEntry* tcEntry, const AVTimecode& avTimecode)
     {
         ostringstream tcStart, tcFR, tcFlags;
         tcStart << tcEntry->value << " (" << avTimecode.start << ")";
@@ -1605,9 +1521,7 @@ namespace TwkMovie
         m_info.proxy.newAttribute("Timecode/Flags", tcFlags.str());
     }
 
-    AVRational
-    MovieFFMpegReader::getTimecodeRate(AVStream* tsStream,
-                                       AVFormatContext* formatContext)
+    AVRational MovieFFMpegReader::getTimecodeRate(AVStream* tsStream, AVFormatContext* formatContext)
     {
         AVRational tcRate = {tsStream->time_base.den, tsStream->time_base.num};
 
@@ -1628,11 +1542,7 @@ namespace TwkMovie
         // is offset by the given positive value.
         //
 
-        m_formatStartFrame =
-            max(int64_t(0),
-                int64_t(0.49
-                        + av_q2d(rate) * double(m_avFormatContext->start_time)
-                              / double(AV_TIME_BASE)));
+        m_formatStartFrame = max(int64_t(0), int64_t(0.49 + av_q2d(rate) * double(m_avFormatContext->start_time) / double(AV_TIME_BASE)));
         int64_t firstFrame = max(int64_t(m_formatStartFrame), int64_t(1));
 
         bool foundTimecode = false;
@@ -1662,8 +1572,7 @@ namespace TwkMovie
                 }
 
                 AVTimecode avTimecode;
-                av_timecode_init_from_string(&avTimecode, tcRate,
-                                             tcEntry->value, m_avFormatContext);
+                av_timecode_init_from_string(&avTimecode, tcRate, tcEntry->value, m_avFormatContext);
                 // Add the timecode attributes to the movie info
                 populateTimecodeMetadata(tcEntry, avTimecode);
                 m_timecodeTrack = i;
@@ -1676,8 +1585,7 @@ namespace TwkMovie
         // any stream
         if (!foundTimecode && m_avFormatContext->metadata)
         {
-            AVDictionaryEntry* fmtTcEntry =
-                av_dict_get(m_avFormatContext->metadata, "timecode", NULL, 0);
+            AVDictionaryEntry* fmtTcEntry = av_dict_get(m_avFormatContext->metadata, "timecode", NULL, 0);
             if (fmtTcEntry && fmtTcEntry->value)
             {
                 // Try to get a valid frame rate the same way as the standard
@@ -1689,8 +1597,7 @@ namespace TwkMovie
                     tcRate = getTimecodeRate(tsStream, m_avFormatContext);
                 }
                 AVTimecode avTimecode;
-                av_timecode_init_from_string(
-                    &avTimecode, tcRate, fmtTcEntry->value, m_avFormatContext);
+                av_timecode_init_from_string(&avTimecode, tcRate, fmtTcEntry->value, m_avFormatContext);
                 // Add the timecode attributes to the movie info
                 populateTimecodeMetadata(fmtTcEntry, avTimecode);
                 firstFrame = avTimecode.start;
@@ -1700,8 +1607,7 @@ namespace TwkMovie
         return firstFrame;
     }
 
-    void MovieFFMpegReader::snagMetadata(AVDictionary* dict, string source,
-                                         FrameBuffer* fb)
+    void MovieFFMpegReader::snagMetadata(AVDictionary* dict, string source, FrameBuffer* fb)
     {
         bool filter = true;
 #if DB_LEVEL & DB_METADATA
@@ -1732,8 +1638,7 @@ namespace TwkMovie
         }
     }
 
-    bool MovieFFMpegReader::snagColr(AVCodecContext* videoCodecContext,
-                                     VideoTrack* track)
+    bool MovieFFMpegReader::snagColr(AVCodecContext* videoCodecContext, VideoTrack* track)
     {
         bool foundIndividualValues = false;
 
@@ -1762,20 +1667,17 @@ namespace TwkMovie
         //
 
         void* fileHandle;
-        if (isMP4format(m_avFormatContext)
-            && mp4v2Utils::readFile(m_filename, fileHandle))
+        if (isMP4format(m_avFormatContext) && mp4v2Utils::readFile(m_filename, fileHandle))
         {
             int streamIndex = track->number;
             mp4v2Utils::getColrType(fileHandle, streamIndex, track->colrType);
             if (track->colrType == "nclc")
             {
                 uint64_t prim, xfer, mtrx;
-                mp4v2Utils::getNCLCValues(fileHandle, streamIndex, prim, xfer,
-                                          mtrx);
+                mp4v2Utils::getNCLCValues(fileHandle, streamIndex, prim, xfer, mtrx);
 
                 videoCodecContext->color_primaries = AVColorPrimaries(prim);
-                videoCodecContext->color_trc =
-                    AVColorTransferCharacteristic(xfer);
+                videoCodecContext->color_trc = AVColorTransferCharacteristic(xfer);
                 videoCodecContext->colorspace = AVColorSpace(mtrx);
 
                 foundIndividualValues = true;
@@ -1799,14 +1701,11 @@ namespace TwkMovie
                 {
                     unsigned char* profile = NULL;
                     uint32_t size = 0;
-                    mp4v2Utils::getPROFValues(fileHandle, streamIndex, profile,
-                                              size);
+                    mp4v2Utils::getPROFValues(fileHandle, streamIndex, profile, size);
 
                     track->fb.setICCprofile((void*)profile, size);
-                    track->fb.setTransferFunction(
-                        TwkFB::ColorSpace::ICCProfile());
-                    track->fb.setPrimaryColorSpace(
-                        TwkFB::ColorSpace::ICCProfile());
+                    track->fb.setTransferFunction(TwkFB::ColorSpace::ICCProfile());
+                    track->fb.setPrimaryColorSpace(TwkFB::ColorSpace::ICCProfile());
                 }
             }
             mp4v2Utils::closeFile(fileHandle);
@@ -1815,16 +1714,14 @@ namespace TwkMovie
         return foundIndividualValues;
     }
 
-    FrameBuffer::Orientation
-    MovieFFMpegReader::snagOrientation(VideoTrack* track)
+    FrameBuffer::Orientation MovieFFMpegReader::snagOrientation(VideoTrack* track)
     {
         AVStream* videoStream = m_avFormatContext->streams[track->number];
         AVCodecContext* videoCodecContext = track->avCodecContext;
         AVPixelFormat nativeFormat = videoCodecContext->pix_fmt;
         const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(nativeFormat);
-        bool yuvPlanar = (!(desc->flags & AV_PIX_FMT_FLAG_ALPHA)
-                          && (desc->flags & AV_PIX_FMT_FLAG_PLANAR)
-                          && !(desc->flags & AV_PIX_FMT_FLAG_RGB));
+        bool yuvPlanar =
+            (!(desc->flags & AV_PIX_FMT_FLAG_ALPHA) && (desc->flags & AV_PIX_FMT_FLAG_PLANAR) && !(desc->flags & AV_PIX_FMT_FLAG_RGB));
 
         int rotation = 0;
         AVDictionaryEntry* rotEntry;
@@ -1839,26 +1736,21 @@ namespace TwkMovie
             double rotationFromSideData = 0;
             for (int i = 0; i < videoCodecContext->nb_coded_side_data; ++i)
             {
-                const AVPacketSideData* sd =
-                    &videoStream->codecpar->coded_side_data[i];
+                const AVPacketSideData* sd = &videoStream->codecpar->coded_side_data[i];
                 if (sd->type == AV_PKT_DATA_DISPLAYMATRIX)
                 {
-                    rotationFromSideData =
-                        av_display_rotation_get((int32_t*)sd->data);
+                    rotationFromSideData = av_display_rotation_get((int32_t*)sd->data);
                 }
             }
 
             // Getting rid of negative rotation metadata
-            rotation = rotationFromSideData < 0
-                           ? lround(rotationFromSideData) + 360
-                           : lround(rotationFromSideData);
+            rotation = rotationFromSideData < 0 ? lround(rotationFromSideData) + 360 : lround(rotationFromSideData);
 
             // Setting rotation
             char charRotation[5]; // Expecting a number between -360 and 360
                                   // (inclusive)
             sprintf(charRotation, "%d", rotation);
-            if (av_dict_set(&videoStream->metadata, "rotate", charRotation, 0)
-                < 0)
+            if (av_dict_set(&videoStream->metadata, "rotate", charRotation, 0) < 0)
             {
                 cout << "ERROR: Unable to rotate video, unable to parse "
                         "rotation metadata."
@@ -1911,8 +1803,7 @@ namespace TwkMovie
         // Check and see if we have any data about the color
         bool hasColorData =
             (snagColr(videoCodecContext, track)
-             || ((videoCodecContext->color_primaries != AVCOL_PRI_UNSPECIFIED)
-                 && (videoCodecContext->color_trc != AVCOL_TRC_UNSPECIFIED)
+             || ((videoCodecContext->color_primaries != AVCOL_PRI_UNSPECIFIED) && (videoCodecContext->color_trc != AVCOL_TRC_UNSPECIFIED)
                  && (videoCodecContext->colorspace != AVCOL_SPC_UNSPECIFIED)));
 
         if (hasColorData)
@@ -1982,9 +1873,18 @@ namespace TwkMovie
             case AVCOL_PRI_FILM: // = 8
                 cspace << "FILM (8)";
                 break;
+            case AVCOL_PRI_BT2020: // = 9
+                cspace << "ITU-R BT2020 (9)";
+                red[0] = 0.708;
+                red[1] = 0.292;
+                green[0] = 0.170;
+                green[1] = 0.797;
+                blue[0] = 0.131;
+                blue[1] = 0.046;
+                track->fb.setPrimaryColorSpace(ColorSpace::Rec2020());
+                break;
             default:
-                cspace << "UNKNOWN (" << videoCodecContext->color_primaries
-                       << ")";
+                cspace << "UNKNOWN (" << videoCodecContext->color_primaries << ")";
                 break;
             }
 
@@ -2015,6 +1915,14 @@ namespace TwkMovie
             case AVCOL_TRC_SMPTE240M: // = 7
                 transfer << "SMPTE-240M (7)";
                 track->fb.setTransferFunction(ColorSpace::SMPTE240M());
+                break;
+            case AVCOL_TRC_SMPTE2084: // = 16
+                transfer << "SMPTE-2084 (16)";
+                track->fb.setTransferFunction(ColorSpace::SMPTE2084());
+                break;
+            case AVCOL_TRC_ARIB_STD_B67: // = 18
+                transfer << "ARIB STD-B67 (18)";
+                track->fb.setTransferFunction(ColorSpace::HybridLogGamma());
                 break;
             default:
                 transfer << "UNKNOWN (" << videoCodecContext->color_trc << ")";
@@ -2066,6 +1974,14 @@ namespace TwkMovie
                 // Used by Dirac, VC-2 and H.264 FRext, see ITU-T SG16
                 matrix << "YCoCg (8)";
                 break;
+            case AVCOL_SPC_BT2020_NCL: // 9
+                matrix << "ITU-R BT2020 NCL (9)";
+                track->fb.setConversion(ColorSpace::Rec2020());
+                break;
+            case AVCOL_SPC_BT2020_CL: // 10
+                matrix << "ITU-R BT2020 CL (10)";
+                track->fb.setConversion(ColorSpace::Rec2020());
+                break;
             default:
                 matrix << "UNKNOWN (" << videoCodecContext->colorspace << ")";
             }
@@ -2076,13 +1992,11 @@ namespace TwkMovie
                 break;
             case AVCOL_RANGE_MPEG: // = 1
                 // the normal 219*2^(n-8) "MPEG" YUV ranges
-                track->fb.attribute<string>(ColorSpace::Range()) =
-                    ColorSpace::VideoRange();
+                track->fb.attribute<string>(ColorSpace::Range()) = ColorSpace::VideoRange();
                 break;
             case AVCOL_RANGE_JPEG: // = 2
                 // the normal 2^n-1 "JPEG" YUV ranges
-                track->fb.attribute<string>(ColorSpace::Range()) =
-                    ColorSpace::FullRange();
+                track->fb.attribute<string>(ColorSpace::Range()) = ColorSpace::FullRange();
                 break;
             default:
                 break;
@@ -2094,38 +2008,31 @@ namespace TwkMovie
                 break;
             case AVCHROMA_LOC_LEFT: // = 1
                 // mpeg2/4, h264 default
-                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) =
-                    ColorSpace::Left();
+                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) = ColorSpace::Left();
                 break;
             case AVCHROMA_LOC_CENTER: // = 2
                 // mpeg1, jpeg, h263
-                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) =
-                    ColorSpace::Center();
+                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) = ColorSpace::Center();
                 break;
             case AVCHROMA_LOC_TOPLEFT: // = 3
                 // DV
-                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) =
-                    ColorSpace::TopLeft();
+                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) = ColorSpace::TopLeft();
                 break;
             case AVCHROMA_LOC_TOP: // = 4
-                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) =
-                    ColorSpace::Top();
+                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) = ColorSpace::Top();
                 break;
             case AVCHROMA_LOC_BOTTOMLEFT: // = 5
-                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) =
-                    ColorSpace::BottomLeft();
+                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) = ColorSpace::BottomLeft();
                 break;
             case AVCHROMA_LOC_BOTTOM: // = 6
-                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) =
-                    ColorSpace::Bottom();
+                track->fb.attribute<string>(ColorSpace::ChromaPlacement()) = ColorSpace::Bottom();
                 break;
             default:
                 break;
             }
 
             // XXX Not sure if these values are still coming from COLR atom
-            track->fb.setPrimaries(white[0], white[1], red[0], red[1], green[0],
-                                   green[1], blue[0], blue[1]);
+            track->fb.setPrimaries(white[0], white[1], red[0], red[1], green[0], green[1], blue[0], blue[1]);
             string prefix = (track->colrType == "") ? "Codec/" : "COLR/";
             track->fb.newAttribute(prefix + "Matrix", matrix.str());
             track->fb.newAttribute(prefix + "Transfer", transfer.str());
@@ -2145,14 +2052,12 @@ namespace TwkMovie
                 // XXX This may no longer be required
                 //
 
-                track->fb.attribute<string>("ColorSpace/Note") =
-                    "FFMPEG provides Rec601, expected Rec709";
+                track->fb.attribute<string>("ColorSpace/Note") = "FFMPEG provides Rec601, expected Rec709";
                 track->fb.setConversion(ColorSpace::Rec601());
                 track->fb.setRange(ColorSpace::VideoRange());
                 track->fb.setPrimaryColorSpace(ColorSpace::Rec709());
             }
-            else if (name == "jpegls" || name == "ljpeg" || name == "mjpeg"
-                     || name == "mjpegb")
+            else if (name == "jpegls" || name == "ljpeg" || name == "mjpeg" || name == "mjpegb")
             {
                 track->fb.setConversion(ColorSpace::Rec601());
                 track->fb.setRange(ColorSpace::FullRange());
@@ -2256,8 +2161,7 @@ namespace TwkMovie
         m_avFormatContext->probesize = TWK_AVFORMAT_PROBESIZE;
         if (avformat_find_stream_info(m_avFormatContext, 0) < 0)
         {
-            TWK_THROW_EXC_STREAM(
-                "Failed to open stream for reading: " << m_filename);
+            TWK_THROW_EXC_STREAM("Failed to open stream for reading: " << m_filename);
         }
     }
 
@@ -2283,6 +2187,9 @@ namespace TwkMovie
         int height = 0;
         int width = 0;
         bool isJ2K = false;
+#if defined(RV_USE_APPLE_PRORES_SDK)
+        bool isProRes = false;
+#endif
         string lang = "und";
         map<string, set<int>> chLangMap;
         map<pair<int, int>, vector<int>> resTrackMap;
@@ -2306,16 +2213,19 @@ namespace TwkMovie
 
                 height = max(height, tsStream->codecpar->height);
                 width = max(width, tsStream->codecpar->width);
-                pair<int, int> key(tsStream->codecpar->height,
-                                   tsStream->codecpar->width);
+                pair<int, int> key(tsStream->codecpar->height, tsStream->codecpar->width);
                 resTrackMap[key].push_back(i);
                 if (tsStream->codecpar->codec_id == AV_CODEC_ID_JPEG2000
-                    || std::string(
-                           avcodec_get_name(tsStream->codecpar->codec_id))
-                           == "jpeg2000")
+                    || std::string(avcodec_get_name(tsStream->codecpar->codec_id)) == "jpeg2000")
                 {
                     isJ2K = true;
                 }
+#if defined(RV_USE_APPLE_PRORES_SDK)
+                else if (tsStream->codecpar->codec_id == AV_CODEC_ID_PRORES)
+                {
+                    isProRes = true;
+                }
+#endif
             }
             else if (tsStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
             {
@@ -2367,8 +2277,7 @@ namespace TwkMovie
         //
 
         pair<int, int> maxRes(height, width);
-        for (vector<int>::iterator trk = resTrackMap[maxRes].begin();
-             trk != resTrackMap[maxRes].end(); trk++)
+        for (vector<int>::iterator trk = resTrackMap[maxRes].begin(); trk != resTrackMap[maxRes].end(); trk++)
         {
             heroVideoTracks[*trk] = fmtCap & MovieIO::MovieRead;
         }
@@ -2381,12 +2290,9 @@ namespace TwkMovie
 
         if (chLangMap.size() > 0)
         {
-            int bestChans = (chLangMap[lang].find(2) != chLangMap[lang].end())
-                                ? 2
-                                : *chLangMap[lang].begin();
+            int bestChans = (chLangMap[lang].find(2) != chLangMap[lang].end()) ? 2 : *chLangMap[lang].begin();
             pair<string, int> bestAudio(lang, bestChans);
-            for (vector<int>::iterator trk = chTrackMap[bestAudio].begin();
-                 trk != chTrackMap[bestAudio].end(); trk++)
+            for (vector<int>::iterator trk = chTrackMap[bestAudio].begin(); trk != chTrackMap[bestAudio].end(); trk++)
             {
                 heroAudioTracks[*trk] = fmtCap & MovieIO::MovieReadAudio;
             }
@@ -2415,6 +2321,9 @@ namespace TwkMovie
                     ContextPool::Reservation reserve(this, i);
                     VideoTrack* track = new VideoTrack;
                     track->useOpenJPH = isJ2K;
+#if defined(RV_USE_APPLE_PRORES_SDK)
+                    track->useAppleProRes = isProRes;
+#endif
                     if (isJ2K)
                     {
                         track->number = i;
@@ -2422,14 +2331,87 @@ namespace TwkMovie
                         trackName << "track " << m_videoTracks.size() + 1;
                         track->name = trackName.str();
                         track->isOpen = true;
-                        openAVCodec(i, &track->avCodecContext,
-                                    &track->hardwareContext);
+                        openAVCodec(i, &track->avCodecContext, &track->hardwareContext);
                         m_videoTracks.push_back(track);
                     }
+#if defined(RV_USE_APPLE_PRORES_SDK)
+                    else if (isProRes)
+                    {
+                        if (openAVCodec(i, &track->avCodecContext, &track->hardwareContext))
+                        {
+                            track->number = i;
+                            ostringstream trackName;
+                            trackName << "track " << m_videoTracks.size() + 1;
+                            track->name = trackName.str();
+                            track->isOpen = true;
+
+                            AVCodecContext* avctx = track->avCodecContext;
+                            AppleProResContext* appleProResCtx = &track->appleProResCtx;
+                            memset(&appleProResCtx->prpixbuf, 0, sizeof(appleProResCtx->prpixbuf));
+
+                            // Always decode to 16-bits
+                            avctx->bits_per_raw_sample = 16;
+                            switch (avctx->codec_tag)
+                            {
+                            case MKTAG('a', 'p', 'c', 'o'):
+                                avctx->profile = AV_PROFILE_PRORES_PROXY;
+                                avctx->pix_fmt = AV_PIX_FMT_YUV422P16;
+                                appleProResCtx->pixfmt = kPRFormat_v216;
+                                break;
+                            case MKTAG('a', 'p', 'c', 's'):
+                                avctx->profile = AV_PROFILE_PRORES_LT;
+                                avctx->pix_fmt = AV_PIX_FMT_YUV422P16;
+                                appleProResCtx->pixfmt = kPRFormat_v216;
+                                break;
+                            case MKTAG('a', 'p', 'c', 'n'):
+                                avctx->profile = AV_PROFILE_PRORES_STANDARD;
+                                avctx->pix_fmt = AV_PIX_FMT_YUV422P16;
+                                appleProResCtx->pixfmt = kPRFormat_v216;
+                                break;
+                            case MKTAG('a', 'p', 'c', 'h'):
+                                avctx->profile = AV_PROFILE_PRORES_HQ;
+                                avctx->pix_fmt = AV_PIX_FMT_YUV422P16;
+                                appleProResCtx->pixfmt = kPRFormat_v216;
+                                break;
+                            case MKTAG('a', 'p', '4', 'h'):
+                                avctx->profile = AV_PROFILE_PRORES_4444;
+                                avctx->pix_fmt = AV_PIX_FMT_YUVA444P16;
+                                appleProResCtx->pixfmt = kPRFormat_y416;
+                                break;
+                            case MKTAG('a', 'p', '4', 'x'):
+                                avctx->profile = AV_PROFILE_PRORES_XQ;
+                                avctx->pix_fmt = AV_PIX_FMT_YUVA444P16;
+                                appleProResCtx->pixfmt = kPRFormat_y416;
+                                break;
+                            default:
+                                avctx->profile = AV_PROFILE_UNKNOWN;
+                                av_log(avctx, AV_LOG_WARNING, "Unknown prores profile %d\n", avctx->codec_tag);
+                                delete track;
+                                track = nullptr;
+                            }
+
+                            if (track)
+                            {
+                                m_videoTracks.push_back(track);
+
+                                FBInfo::ViewInfo vinfo;
+                                vinfo.name = trackName.str();
+                                m_info.viewInfos.push_back(vinfo);
+                                m_info.views.push_back(trackName.str());
+                                ostringstream trk;
+                                trk << "Track" << i;
+
+                                snagMetadata(tsStream->metadata, trk.str(), &m_info.proxy);
+
+                                appleProResCtx->avPixelFormat = avctx->pix_fmt;
+                                avctx->sw_pix_fmt = avctx->pix_fmt;
+                            }
+                        }
+                    }
+#endif
                     else
                     {
-                        if (openAVCodec(i, &track->avCodecContext,
-                                        &track->hardwareContext))
+                        if (openAVCodec(i, &track->avCodecContext, &track->hardwareContext))
                         {
                             track->number = i;
 
@@ -2446,8 +2428,7 @@ namespace TwkMovie
                             ostringstream trk;
                             trk << "Track" << i;
 
-                            snagMetadata(tsStream->metadata, trk.str(),
-                                         &m_info.proxy);
+                            snagMetadata(tsStream->metadata, trk.str(), &m_info.proxy);
                         }
                         else
                         {
@@ -2470,8 +2451,7 @@ namespace TwkMovie
                         ostringstream trk;
                         trk << "Track" << i;
 
-                        snagMetadata(tsStream->metadata, trk.str(),
-                                     &m_info.proxy);
+                        snagMetadata(tsStream->metadata, trk.str(), &m_info.proxy);
                     }
                     else
                     {
@@ -2615,45 +2595,37 @@ namespace TwkMovie
             AVCodecContext* videoCodecContext = track->avCodecContext;
 
             // Tell RV to restrict caching to one thread
-            bool slowTrackRandomAccess =
-                (codecHasSlowAccess(videoCodecContext->codec->name)
-                 || TwkUtil::pathIsURL(m_filename));
+            bool slowTrackRandomAccess = (codecHasSlowAccess(videoCodecContext->codec->name) || TwkUtil::pathIsURL(m_filename));
             slowRandomAccess = slowTrackRandomAccess || slowRandomAccess;
 
             // Make sure the orientation/rotation matches for each track
             m_info.proxy.setOrientation(snagOrientation(track));
             if (i > 0 && m_info.proxy.orientation() != m_info.orientation)
             {
-                TWK_THROW_EXC_STREAM(
-                    "Streams/Tracks with mixed rotations are unsupported");
+                TWK_THROW_EXC_STREAM("Streams/Tracks with mixed rotations are unsupported");
             }
             m_info.orientation = m_info.proxy.orientation();
         }
         if (slowRandomAccess)
         {
-            m_info.proxy.attribute<string>("Note") =
-                "Movie Has Slow Random Access";
+            m_info.proxy.attribute<string>("Note") = "Movie Has Slow Random Access";
         }
         m_info.slowRandomAccess = slowRandomAccess;
 
         // Set the shared MovieInfo. XXX Default to first video track
-        AVStream* firstVideoStream =
-            m_avFormatContext->streams[m_videoTracks[0]->number];
-        AVCodecContext* firstVideoCodecContext =
-            m_videoTracks[0]->avCodecContext;
+        AVStream* firstVideoStream = m_avFormatContext->streams[m_videoTracks[0]->number];
+        AVCodecContext* firstVideoCodecContext = m_videoTracks[0]->avCodecContext;
         AVPixelFormat nativeFormat = firstVideoCodecContext->pix_fmt;
         const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(nativeFormat);
         int bitSize = desc->comp[0].depth - desc->comp[0].shift;
         m_info.numChannels = desc->nb_components;
-        m_info.dataType =
-            (bitSize > 8) ? FrameBuffer::USHORT : FrameBuffer::UCHAR;
+        m_info.dataType = (bitSize > 8) ? FrameBuffer::USHORT : FrameBuffer::UCHAR;
 
         // Set the channel specific information
         string fmtname = string(av_get_pix_fmt_name(nativeFormat));
         set<char> visited;
         int c = 0;
-        for (string::iterator it = fmtname.begin();
-             it != fmtname.end() && c < m_info.numChannels; ++it)
+        for (string::iterator it = fmtname.begin(); it != fmtname.end() && c < m_info.numChannels; ++it)
         {
             if (!isdigit(*it) && visited.find(*it) == visited.end())
             {
@@ -2698,8 +2670,7 @@ namespace TwkMovie
             if (cWidth > width || cHeight > height)
             {
                 ostringstream msg;
-                msg << "Expected resolution " << width << "x" << height
-                    << " but found " << cWidth << "x" << cHeight
+                msg << "Expected resolution " << width << "x" << height << " but found " << cWidth << "x" << cHeight
                     << ". Updating to new dimensions.";
                 report(msg.str(), true);
             }
@@ -2740,43 +2711,30 @@ namespace TwkMovie
             AudioTrack* track = m_audioTracks[i];
             AVStream* audioStream = m_avFormatContext->streams[track->number];
             AVCodecContext* audioCodecContext = track->avCodecContext;
-            if (audioSampleRate != 0
-                && audioSampleRate != audioCodecContext->sample_rate)
+            if (audioSampleRate != 0 && audioSampleRate != audioCodecContext->sample_rate)
             {
-                TWK_THROW_EXC_STREAM(
-                    "Audio sample rate must match for each track!");
+                TWK_THROW_EXC_STREAM("Audio sample rate must match for each track!");
             }
             audioSampleRate = audioCodecContext->sample_rate;
-            if (numChannels != 0
-                && numChannels != audioCodecContext->ch_layout.nb_channels)
+            if (numChannels != 0 && numChannels != audioCodecContext->ch_layout.nb_channels)
             {
-                TWK_THROW_EXC_STREAM(
-                    "Audio channel count must match for each track!");
+                TWK_THROW_EXC_STREAM("Audio channel count must match for each track!");
             }
             numChannels = audioCodecContext->ch_layout.nb_channels;
             track->numChannels = numChannels;
 
             double timebase = av_q2d(audioStream->time_base);
             int64_t duration = audioStream->duration;
-            audioInfoLength =
-                (duration > 0)
-                    ? int64_t(duration * timebase * audioSampleRate + 0.49)
-                    : int64_t(double(m_avFormatContext->duration)
-                                  / double(AV_TIME_BASE) * audioSampleRate
-                              + 0.49);
+            audioInfoLength = (duration > 0) ? int64_t(duration * timebase * audioSampleRate + 0.49)
+                                             : int64_t(double(m_avFormatContext->duration) / double(AV_TIME_BASE) * audioSampleRate + 0.49);
             audioFormat = audioCodecContext->sample_fmt;
             audioLanguage = streamLang(track->number);
             audioCodec = string(audioCodecContext->codec->long_name);
 
-            DBL(DB_AUDIO,
-                "Audio track "
-                    << i << " start_time: " << audioStream->start_time
-                    << " num frames: " << audioStream->nb_frames
-                    << " frame size: " << audioCodecContext->frame_size
-                    << " duration: " << duration << " length: "
-                    << audioInfoLength << " sample_rate: " << audioSampleRate
-                    << " channels: " << numChannels
-                    << " timebase: " << timebase);
+            DBL(DB_AUDIO, "Audio track " << i << " start_time: " << audioStream->start_time << " num frames: " << audioStream->nb_frames
+                                         << " frame size: " << audioCodecContext->frame_size << " duration: " << duration
+                                         << " length: " << audioInfoLength << " sample_rate: " << audioSampleRate
+                                         << " channels: " << numChannels << " timebase: " << timebase);
 
             // Get the input source channels
             AVChannelLayout layout = audioCodecContext->ch_layout;
@@ -2796,8 +2754,7 @@ namespace TwkMovie
         m_info.proxy.newAttribute("AudioSamples", string(temp));
         sprintf(temp, "%d", 8 * av_get_bytes_per_sample(audioFormat));
         m_info.proxy.newAttribute("AudioBitsPerSample", string(temp));
-        m_info.proxy.newAttribute("AudioSampleFormat",
-                                  string(av_get_sample_fmt_name(audioFormat)));
+        m_info.proxy.newAttribute("AudioSampleFormat", string(av_get_sample_fmt_name(audioFormat)));
         m_info.proxy.newAttribute("AudioCodec", audioCodec);
         m_info.proxy.newAttribute("AudioLanguage", audioLanguage);
         m_info.audioLanguages.push_back(audioLanguage);
@@ -2815,8 +2772,7 @@ namespace TwkMovie
 
         // Return named audio channels where possible
         ostringstream channelStr;
-        channelStr << numChannels << " total (" << m_audioTracks.size()
-                   << " tracks)";
+        channelStr << numChannels << " total (" << m_audioTracks.size() << " tracks)";
         for (int ch = 0; ch < audioChannels.size(); ch++)
         {
             channelStr << "\n" << channelString(audioChannels[ch]);
@@ -2824,8 +2780,7 @@ namespace TwkMovie
         m_info.proxy.newAttribute("AudioChannels", channelStr.str());
 
         // Remove unused PixelAspectRatio
-        m_info.proxy.deleteAttribute(
-            m_info.proxy.findAttribute("PixelAspectRatio"));
+        m_info.proxy.deleteAttribute(m_info.proxy.findAttribute("PixelAspectRatio"));
 
         m_info.audio = true;
     }
@@ -2841,11 +2796,8 @@ namespace TwkMovie
         snagVideoColorInformation(track);
 
         track->fb.setPixelAspectRatio(m_info.pixelAspect);
-        track->fb.newAttribute(
-            "VideoPixelFormat",
-            string(av_get_pix_fmt_name(videoCodecContext->pix_fmt)));
-        track->fb.newAttribute("VideoCodec",
-                               string(videoCodecContext->codec->long_name));
+        track->fb.newAttribute("VideoPixelFormat", string(av_get_pix_fmt_name(videoCodecContext->pix_fmt)));
+        track->fb.newAttribute("VideoCodec", string(videoCodecContext->codec->long_name));
 
         ostringstream attr;
         attr << m_videoTracks.size();
@@ -2866,8 +2818,7 @@ namespace TwkMovie
         attr.clear();
         attr.str("");
         int frameCount = m_info.end - m_info.start + 1;
-        attr << frameCount << " frames, " << (double(frameCount) / m_info.fps)
-             << " sec";
+        attr << frameCount << " frames, " << (double(frameCount) / m_info.fps) << " sec";
         fb->newAttribute("Duration", attr.str());
         if (view != "")
             fb->newAttribute("View", view);
@@ -2880,17 +2831,12 @@ namespace TwkMovie
         // NO LONGER NEEDED
     }
 
-    void MovieFFMpegReader::collectPlaybackTiming(vector<bool> heroVideoTracks,
-                                                  vector<bool> heroAudioTracks)
+    void MovieFFMpegReader::collectPlaybackTiming(vector<bool> heroVideoTracks, vector<bool> heroAudioTracks)
     {
-        double formatTimeDur =
-            double(m_avFormatContext->duration) / double(AV_TIME_BASE);
+        double formatTimeDur = double(m_avFormatContext->duration) / double(AV_TIME_BASE);
 
-        DBL(DB_DURATION,
-            "format start time: " << m_avFormatContext->start_time
-                                  << " format dur (secs): " << formatTimeDur
-                                  << " (" << m_avFormatContext->duration << "/"
-                                  << AV_TIME_BASE << ")");
+        DBL(DB_DURATION, "format start time: " << m_avFormatContext->start_time << " format dur (secs): " << formatTimeDur << " ("
+                                               << m_avFormatContext->duration << "/" << AV_TIME_BASE << ")");
 
         //
         // As we walk the streams we will look out for video. When we encounter
@@ -2922,50 +2868,35 @@ namespace TwkMovie
             int64_t stmDuration = tsStream->duration;
             double frameDur = 1.0 / (stmTB * codecFPS);
 
-            stmFrames =
-                (stmFrames <= 0 && formatTimeDur > 0 && codecFPS > 0)
-                    ? int(floor(formatTimeDur / (stmTB * double(frameDur))
-                                + 0.5))
-                    : stmFrames;
+            stmFrames = (stmFrames <= 0 && formatTimeDur > 0 && codecFPS > 0) ? int(floor(formatTimeDur / (stmTB * double(frameDur)) + 0.5))
+                                                                              : stmFrames;
             stmFrames = (fmtFrames > 0) ? min(fmtFrames, stmFrames) : stmFrames;
 
-            stmDuration = (stmDuration <= 0 && formatTimeDur > 0 && stmTB > 0)
-                              ? int64_t(formatTimeDur / stmTB)
-                              : stmDuration;
+            stmDuration = (stmDuration <= 0 && formatTimeDur > 0 && stmTB > 0) ? int64_t(formatTimeDur / stmTB) : stmDuration;
 
-            DBL(DB_TIMESTAMPS,
-                "stm: " << i << " stmFrames: " << stmFrames
-                        << " stmDuration: " << stmDuration
-                        << " stmTB: " << stmTB << " realFPS: " << realFPS
-                        << " avgFPS: " << avgFPS << " codecFPS: " << codecFPS
-                        << " frameDur: " << frameDur);
+            DBL(DB_TIMESTAMPS, "stm: " << i << " stmFrames: " << stmFrames << " stmDuration: " << stmDuration << " stmTB: " << stmTB
+                                       << " realFPS: " << realFPS << " avgFPS: " << avgFPS << " codecFPS: " << codecFPS
+                                       << " frameDur: " << frameDur);
 
-            if (tsStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO
-                && heroVideoTracks[i] && stmFrames > 0)
+            if (tsStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && heroVideoTracks[i] && stmFrames > 0)
             {
 
                 timeDuration = max(timeDuration, stmDuration * stmTB);
                 frames = max(frames, stmFrames);
-                AVRational tsRate = (avgFPS > 0) ? tsStream->avg_frame_rate
-                                                 : tsStream->r_frame_rate;
+                AVRational tsRate = (avgFPS > 0) ? tsStream->avg_frame_rate : tsStream->r_frame_rate;
                 rate = (av_q2d(tsRate) > av_q2d(rate)) ? tsRate : rate;
 
-                DBL(DB_TIMESTAMPS,
-                    "stm: " << i << " fps: " << codecFPS << " frames: "
-                            << frames << " frameDur: " << frameDur
-                            << " timeDuration: " << timeDuration
-                            << " start_time: " << tsStream->start_time);
+                DBL(DB_TIMESTAMPS, "stm: " << i << " fps: " << codecFPS << " frames: " << frames << " frameDur: " << frameDur
+                                           << " timeDuration: " << timeDuration << " start_time: " << tsStream->start_time);
             }
             // check if we are reading an image instead of a video
-            else if (tsStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO
-                     && heroVideoTracks[i]
+            else if (tsStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && heroVideoTracks[i]
                      && isImageFormat(m_avFormatContext->iformat->name))
             {
                 timeDuration = 1;
                 frames = 1;
             }
-            else if (tsStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO
-                     && heroAudioTracks[i])
+            else if (tsStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && heroAudioTracks[i])
             {
                 if (stmDuration > 0 && stmTB > 0)
                 {
@@ -2998,12 +2929,11 @@ namespace TwkMovie
         }
         if (timeDuration <= 0)
         {
-            TWK_THROW_EXC_STREAM(
-                "Could not determine playback timing: " << m_filename);
+            TWK_THROW_EXC_STREAM("Could not determine playback timing: " << m_filename);
         }
         if (frames == 0)
         {
-            frames = timeDuration * m_io->defaultFPS();
+            frames = std::round(timeDuration * m_io->defaultFPS());
             rate.num = m_io->defaultFPS();
             rate.den = 1.0f;
         }
@@ -3019,23 +2949,19 @@ namespace TwkMovie
         m_info.start = getFirstFrame(rate);
         m_info.end = m_info.start + frames - 1;
         m_info.inc = 1;
-        m_info.fps =
-            floor(av_q2d(rate) * FPS_PRECISION_LIMIT) / FPS_PRECISION_LIMIT;
+        m_info.fps = floor(av_q2d(rate) * FPS_PRECISION_LIMIT) / FPS_PRECISION_LIMIT;
     }
 
     bool MovieFFMpegReader::isImageFormat(const char* format)
     {
-        if (!std::strcmp(format, "png_pipe")
-            || !std::strcmp(format, "jpeg_pipe"))
+        if (!std::strcmp(format, "png_pipe") || !std::strcmp(format, "jpeg_pipe"))
         {
             return true;
         }
         return false;
     }
 
-    void MovieFFMpegReader::copyFrame(const AVFrame* srcFrame,
-                                      AVFrame* dstFrame, int width, int height,
-                                      bool convertFormat,
+    void MovieFFMpegReader::copyFrame(const AVFrame* srcFrame, AVFrame* dstFrame, int width, int height, bool convertFormat,
                                       SwsContext*& imgConvertContext)
     {
         HOP_PROF("copyFrame()");
@@ -3043,12 +2969,9 @@ namespace TwkMovie
         // Simply copy the data if no format conversion required
         if (!convertFormat)
         {
-            av_image_copy(static_cast<uint8_t* const*>(dstFrame->data),
-                          static_cast<const int*>(dstFrame->linesize),
-                          const_cast<const uint8_t**>(srcFrame->data),
-                          static_cast<const int*>(srcFrame->linesize),
-                          static_cast<AVPixelFormat>(srcFrame->format), width,
-                          height);
+            av_image_copy(static_cast<uint8_t* const*>(dstFrame->data), static_cast<const int*>(dstFrame->linesize),
+                          const_cast<const uint8_t**>(srcFrame->data), static_cast<const int*>(srcFrame->linesize),
+                          static_cast<AVPixelFormat>(srcFrame->format), width, height);
 
             return;
         }
@@ -3065,21 +2988,14 @@ namespace TwkMovie
         // With a 4K 60 fps, the image conversion was 45 ms for the third one.
         // Whereas it was 3 ms, 2 ms and 2 ms with the following custom
         // functions.
-        bool isProRes422 = srcFrame->format == AV_PIX_FMT_P210LE
-                           && dstFrame->format == AV_PIX_FMT_YUV422P16LE;
-        bool isProRes4444WithoutAlpha =
-            srcFrame->format == AV_PIX_FMT_P416LE
-            && dstFrame->format == AV_PIX_FMT_YUV444P16LE;
-        bool isProRes4444WithAlpha =
-            srcFrame->format == AV_PIX_FMT_AYUV64LE
-            && dstFrame->format == AV_PIX_FMT_YUVA444P16LE;
+        bool isProRes422 = srcFrame->format == AV_PIX_FMT_P210LE && dstFrame->format == AV_PIX_FMT_YUV422P16LE;
+        bool isProRes4444WithoutAlpha = srcFrame->format == AV_PIX_FMT_P416LE && dstFrame->format == AV_PIX_FMT_YUV444P16LE;
+        bool isProRes4444WithAlpha = srcFrame->format == AV_PIX_FMT_AYUV64LE && dstFrame->format == AV_PIX_FMT_YUVA444P16LE;
 
         if (isProRes422 || isProRes4444WithoutAlpha)
         {
-            const uint16_t* srcY =
-                reinterpret_cast<const uint16_t*>(srcFrame->data[0]);
-            const uint16_t* srcCbCr =
-                reinterpret_cast<const uint16_t*>(srcFrame->data[1]);
+            const uint16_t* srcY = reinterpret_cast<const uint16_t*>(srcFrame->data[0]);
+            const uint16_t* srcCbCr = reinterpret_cast<const uint16_t*>(srcFrame->data[1]);
 
             const size_t srcStrideY = srcFrame->linesize[0];
             const size_t srcStrideCbCr = srcFrame->linesize[1];
@@ -3094,18 +3010,16 @@ namespace TwkMovie
 
             if (isProRes422)
             {
-                planarP210_to_planarYUV422P16(
-                    width, height, srcY, srcCbCr, srcStrideY, srcStrideCbCr,
-                    dstY, dstCb, dstCr, dstStrideY, dstStrideCb, dstStrideCr);
+                planarP210_to_planarYUV422P16(width, height, srcY, srcCbCr, srcStrideY, srcStrideCbCr, dstY, dstCb, dstCr, dstStrideY,
+                                              dstStrideCb, dstStrideCr);
 
                 return;
             }
 
             if (isProRes4444WithoutAlpha)
             {
-                planarP416_to_planarYUV444P16(
-                    width, height, srcY, srcCbCr, srcStrideY, srcStrideCbCr,
-                    dstY, dstCb, dstCr, dstStrideY, dstStrideCb, dstStrideCr);
+                planarP416_to_planarYUV444P16(width, height, srcY, srcCbCr, srcStrideY, srcStrideCbCr, dstY, dstCb, dstCr, dstStrideY,
+                                              dstStrideCb, dstStrideCr);
 
                 return;
             }
@@ -3118,8 +3032,7 @@ namespace TwkMovie
             auto* dstCr = reinterpret_cast<std::uint16_t*>(dstFrame->data[2]);
             auto* dstA = reinterpret_cast<std::uint16_t*>(dstFrame->data[3]);
 
-            packedAYUV64_to_planarYUVA16(width, height, srcFrame->data[0], dstY,
-                                         dstCb, dstCr, dstA);
+            packedAYUV64_to_planarYUVA16(width, height, srcFrame->data[0], dstY, dstCb, dstCr, dstA);
             return;
         }
 #endif
@@ -3130,24 +3043,18 @@ namespace TwkMovie
         // checks if the parameters are the ones already saved in context.
         // If that is the case, it returns the current context. Otherwise,
         // it frees context and gets a new context with the new parameters.
-        imgConvertContext = sws_getCachedContext(
-            imgConvertContext, width, height,
-            static_cast<AVPixelFormat>(srcFrame->format), width, height,
-            static_cast<AVPixelFormat>(dstFrame->format), SWS_BICUBIC, 0, 0, 0);
+        imgConvertContext = sws_getCachedContext(imgConvertContext, width, height, static_cast<AVPixelFormat>(srcFrame->format), width,
+                                                 height, static_cast<AVPixelFormat>(dstFrame->format), SWS_BICUBIC, 0, 0, 0);
         if (imgConvertContext == nullptr)
         {
             throw std::runtime_error("Can't initialize conversion context");
         }
 
-        sws_scale(imgConvertContext,
-                  static_cast<const uint8_t* const*>(srcFrame->data),
-                  static_cast<const int*>(srcFrame->linesize), 0 /*srcSliceY*/,
-                  height, static_cast<uint8_t* const*>(dstFrame->data),
-                  static_cast<const int*>(dstFrame->linesize));
+        sws_scale(imgConvertContext, static_cast<const uint8_t* const*>(srcFrame->data), static_cast<const int*>(srcFrame->linesize),
+                  0 /*srcSliceY*/, height, static_cast<uint8_t* const*>(dstFrame->data), static_cast<const int*>(dstFrame->linesize));
     }
 
-    ChannelsVector MovieFFMpegReader::idAudioChannels(AVChannelLayout layout,
-                                                      int numChannels)
+    ChannelsVector MovieFFMpegReader::idAudioChannels(AVChannelLayout layout, int numChannels)
     {
         uint64_t unmasked;
         ChannelsVector chans;
@@ -3242,8 +3149,7 @@ namespace TwkMovie
                 continue;
             }
 
-            AVChannel avChannel =
-                av_channel_layout_channel_from_index(&layout, i);
+            AVChannel avChannel = av_channel_layout_channel_from_index(&layout, i);
             std::array<char, 64> chName;
             std::array<char, 256> chDesc;
 
@@ -3251,13 +3157,9 @@ namespace TwkMovie
             // return amount of bytes needed to hold the output string,
             // or a negative AVERROR on failure.
             if (av_channel_name(chName.data(), chName.size(), avChannel) > 0
-                && av_channel_description(chDesc.data(), chDesc.size(),
-                                          avChannel)
-                       > 0)
+                && av_channel_description(chDesc.data(), chDesc.size(), avChannel) > 0)
             {
-                DBL(DB_AUDIO, "Audio ch " << (chans.size() - 1) << " is: '"
-                                          << chName.data() << "-"
-                                          << chDesc.data());
+                DBL(DB_AUDIO, "Audio ch " << (chans.size() - 1) << " is: '" << chName.data() << "-" << chDesc.data());
             }
         }
 
@@ -3277,18 +3179,15 @@ namespace TwkMovie
         return chans;
     }
 
-    size_t MovieFFMpegReader::audioFillBuffer(const AudioReadRequest& request,
-                                              AudioBuffer& buffer)
+    size_t MovieFFMpegReader::audioFillBuffer(const AudioReadRequest& request, AudioBuffer& buffer)
     {
         DBL(DB_AUDIO, "AUDIO_FILL_BUFFER " << m_filename);
 
         double sourceRate = m_info.audioSampleRate;
         SampleTime margin = request.startTime == 0 ? 0 : request.margin;
         Time formatStart = m_formatStartFrame / m_info.fps;
-        SampleTime start =
-            timeToSamples(request.startTime + formatStart, sourceRate) - margin;
-        SampleTime num =
-            timeToSamples(request.duration, sourceRate) + margin * 2;
+        SampleTime start = timeToSamples(request.startTime + formatStart, sourceRate) - margin;
+        SampleTime num = timeToSamples(request.duration, sourceRate) + margin * 2;
 
         //
         // If this source never built its AudioState from the actual graph audio
@@ -3300,18 +3199,14 @@ namespace TwkMovie
         // requested.
         //
 
-        if (!m_audioState
-            || (canConvertAudioChannels()
-                && m_audioState->channels != buffer.channels()))
+        if (!m_audioState || (canConvertAudioChannels() && m_audioState->channels != buffer.channels()))
         {
             Layout layout = channelLayout(buffer.channels());
             Movie::AudioConfiguration conf(buffer.rate(), layout, num);
             audioConfigure(conf);
         }
 
-        ChannelsVector channels = (canConvertAudioChannels())
-                                      ? buffer.channels()
-                                      : m_info.audioChannels;
+        ChannelsVector channels = (canConvertAudioChannels()) ? buffer.channels() : m_info.audioChannels;
 
         if (channels.empty())
         {
@@ -3322,15 +3217,10 @@ namespace TwkMovie
         buffer.reconfigure(num, channels, sourceRate, request.startTime);
         buffer.zero();
 
-        DBL(DB_AUDIO,
-            "margin: " << margin << " start: " << start << " num: " << num
-                       << " convert: " << canConvertAudioChannels()
-                       << " bufChans: " << buffer.channels().size()
-                       << " startTime: " << request.startTime << " duration: "
-                       << request.duration << " srcRate: " << sourceRate
-                       << " srcChans: " << m_info.audioChannels.size()
-                       << " channelsPerTrack: "
-                       << m_audioState->channelsPerTrack);
+        DBL(DB_AUDIO, "margin: " << margin << " start: " << start << " num: " << num << " convert: " << canConvertAudioChannels()
+                                 << " bufChans: " << buffer.channels().size() << " startTime: " << request.startTime << " duration: "
+                                 << request.duration << " srcRate: " << sourceRate << " srcChans: " << m_info.audioChannels.size()
+                                 << " channelsPerTrack: " << m_audioState->channelsPerTrack);
 
         vector<TwkAudio::SampleVector> chbuffers(m_audioTracks.size());
         SampleTime maxCollected = 0;
@@ -3343,16 +3233,13 @@ namespace TwkMovie
             track->isOpen = openAVCodec(track->number, &track->avCodecContext);
             if (!track->isOpen)
             {
-                cout << "ERROR: Unable to read from audio stream: "
-                     << track->number << endl;
+                cout << "ERROR: Unable to read from audio stream: " << track->number << endl;
                 continue;
             }
             AVStream* audioStream = m_avFormatContext->streams[track->number];
 
             DBL(DB_AUDIO,
-                "nb_frames: " << audioStream->nb_frames
-                              << " timebase: " << av_q2d(audioStream->time_base)
-                              << " start: " << start);
+                "nb_frames: " << audioStream->nb_frames << " timebase: " << av_q2d(audioStream->time_base) << " start: " << start);
 
             chbuffers[i].resize(num * m_audioState->channelsPerTrack);
             SampleTime collected = 0;
@@ -3366,14 +3253,10 @@ namespace TwkMovie
                 collected += retrieved;
                 track->desired -= retrieved;
                 track->start += retrieved;
-                track->bufferPointer +=
-                    m_audioState->channelsPerTrack * retrieved;
+                track->bufferPointer += m_audioState->channelsPerTrack * retrieved;
 
-                DBL(DB_AUDIO, "track: " << track->number
-                                        << " numChans: " << track->numChannels
-                                        << " collected: " << collected
-                                        << " retrieved: " << retrieved
-                                        << " readBeginning: " << track->start
+                DBL(DB_AUDIO, "track: " << track->number << " numChans: " << track->numChannels << " collected: " << collected
+                                        << " retrieved: " << retrieved << " readBeginning: " << track->start
                                         << " desired: " << track->desired);
             } while (track->desired > 0 && retrieved > 0);
             maxCollected = max(collected, maxCollected);
@@ -3395,8 +3278,7 @@ namespace TwkMovie
         size_t sampsPerTrack = maxCollected * m_audioState->channelsPerTrack;
         interlace(chbuffers, buffer.pointer(), 0, sampsPerTrack);
 
-        DBL(DB_AUDIO, "Done (" << maxCollected << "/" << num
-                               << ") and heading home!!!\n");
+        DBL(DB_AUDIO, "Done (" << maxCollected << "/" << num << ") and heading home!!!\n");
 
         return maxCollected;
     }
@@ -3407,35 +3289,24 @@ namespace TwkMovie
         AVCodecContext* audioCodecContext = track->avCodecContext;
         double timebase = av_q2d(audioStream->time_base);
 
-        DBL(DB_AUDIO,
-            "start: " << track->start << " timebase: " << timebase
-                      << " lastDecodedAudio: " << track->lastDecodedAudio
-                      << " bufferLength: " << track->bufferLength
-                      << " bufferStart: " << track->bufferStart
-                      << " bufferEnd: " << track->bufferEnd);
+        DBL(DB_AUDIO, "start: " << track->start << " timebase: " << timebase << " lastDecodedAudio: " << track->lastDecodedAudio
+                                << " bufferLength: " << track->bufferLength << " bufferStart: " << track->bufferStart
+                                << " bufferEnd: " << track->bufferEnd);
 
-        if (track->start > (track->bufferEnd + track->bufferLength)
-            || track->start < track->lastDecodedAudio
-            || track->lastDecodedAudio == AV_NOPTS_VALUE
-            || (m_audioTracks.size() > 1 && track->start > track->bufferEnd))
+        if (track->start > (track->bufferEnd + track->bufferLength) || track->start < track->lastDecodedAudio
+            || track->lastDecodedAudio == AV_NOPTS_VALUE || (m_audioTracks.size() > 1 && track->start > track->bufferEnd))
         {
-            int64_t seekTarget = int64_t(double(track->start - 1)
-                                         / (m_info.audioSampleRate * timebase));
+            int64_t seekTarget = int64_t(double(track->start - 1) / (m_info.audioSampleRate * timebase));
 
             DBL(DB_AUDIO, "seekTarget: " << seekTarget);
 
             avcodec_flush_buffers(audioCodecContext);
-            if (av_seek_frame(m_avFormatContext, track->number, seekTarget,
-                              AVSEEK_FLAG_BACKWARD)
-                < 0)
+            if (av_seek_frame(m_avFormatContext, track->number, seekTarget, AVSEEK_FLAG_BACKWARD) < 0)
             {
                 // Try from the start if targeted seek fails
-                if (av_seek_frame(m_avFormatContext, -1,
-                                  m_avFormatContext->start_time, 0)
-                    < 0)
+                if (av_seek_frame(m_avFormatContext, -1, m_avFormatContext->start_time, 0) < 0)
                 {
-                    TWK_THROW_EXC_STREAM(
-                        "av_seek_frame failed in audio stream.");
+                    TWK_THROW_EXC_STREAM("av_seek_frame failed in audio stream.");
                 }
             }
             track->lastDecodedAudio = AV_NOPTS_VALUE;
@@ -3446,11 +3317,8 @@ namespace TwkMovie
         {
             if (track->start <= track->bufferEnd)
             {
-                DBL(DB_AUDIO, "draining remainder start: "
-                                  << track->start
-                                  << " desired: " << track->desired
-                                  << " bufferStart: " << track->bufferStart
-                                  << " bufferEnd: " << track->bufferEnd);
+                DBL(DB_AUDIO, "draining remainder start: " << track->start << " desired: " << track->desired
+                                                           << " bufferStart: " << track->bufferStart << " bufferEnd: " << track->bufferEnd);
 
                 return decodeAudioForBuffer(track);
             }
@@ -3478,34 +3346,25 @@ namespace TwkMovie
                 // Loop to make sure we only read from the correct AVStream
                 do
                 {
-                    DBL(DB_AUDIO, "freeing audio packet from stream: "
-                                      << track->audioPacket->stream_index);
+                    DBL(DB_AUDIO, "freeing audio packet from stream: " << track->audioPacket->stream_index);
                     av_packet_unref(track->audioPacket);
-                    if (av_read_frame(m_avFormatContext, track->audioPacket)
-                        < 0)
+                    if (av_read_frame(m_avFormatContext, track->audioPacket) < 0)
                     {
                         finalPacket = true;
                     }
-                } while ((track->audioPacket->stream_index != track->number)
-                         && !finalPacket);
+                } while ((track->audioPacket->stream_index != track->number) && !finalPacket);
             }
 
-            DBL(DB_AUDIO, "pkt: " << track->audioPacket->stream_index
-                                  << " trk: " << track->number
-                                  << " dts: " << track->audioPacket->dts
-                                  << " pts: " << track->audioPacket->pts
-                                  << " size: " << track->audioPacket->size
-                                  << " dur: " << track->audioPacket->duration
-                                  << " final: " << finalPacket);
+            DBL(DB_AUDIO, "pkt: " << track->audioPacket->stream_index << " trk: " << track->number << " dts: " << track->audioPacket->dts
+                                  << " pts: " << track->audioPacket->pts << " size: " << track->audioPacket->size
+                                  << " dur: " << track->audioPacket->duration << " final: " << finalPacket);
 
             avcodec_send_packet(audioCodecContext, track->audioPacket);
             // Loop we normally pass through once unless draining the last
             // packet
             do
             {
-                frameFinished =
-                    avcodec_receive_frame(audioCodecContext, track->audioFrame)
-                    == 0;
+                frameFinished = avcodec_receive_frame(audioCodecContext, track->audioFrame) == 0;
                 if (!frameFinished)
                 {
                     break;
@@ -3517,42 +3376,24 @@ namespace TwkMovie
                     track->bufferEnd += track->bufferLength;
                 }
 
-                DBL(DB_AUDIO,
-                    "pkt: " << track->audioPacket->stream_index
-                            << " frmDts: " << track->audioFrame->pkt_dts
-                            << " frmPts: " << track->audioFrame->pts
-                            << " frmSize: " << track->audioFrame->pkt_size
-                            << " bufferStart: " << track->bufferStart
-                            << " bufferEnd: " << track->bufferEnd
-                            << " bufferLength: " << track->bufferLength
-                            << " last: " << track->lastDecodedAudio
-                            << " start: " << track->start
-                            << " desired: " << track->desired
-                            << " frameFinished: " << frameFinished
-                            << " frmDur: " << track->audioFrame->pkt_duration
-                            << " nb_samples: " << track->audioFrame->nb_samples
-                            << " sampleRate: " << track->audioFrame->sample_rate
-                            << " linesize: " << track->audioFrame->linesize[0]
-                            << " size: " << track->audioPacket->size);
+                DBL(DB_AUDIO, "pkt: " << track->audioPacket->stream_index << " frmDts: " << track->audioFrame->pkt_dts
+                                      << " frmPts: " << track->audioFrame->pts << " frmSize: " << track->audioFrame->pkt_size
+                                      << " bufferStart: " << track->bufferStart << " bufferEnd: " << track->bufferEnd
+                                      << " bufferLength: " << track->bufferLength << " last: " << track->lastDecodedAudio
+                                      << " start: " << track->start << " desired: " << track->desired << " frameFinished: " << frameFinished
+                                      << " frmDur: " << track->audioFrame->pkt_duration << " nb_samples: " << track->audioFrame->nb_samples
+                                      << " sampleRate: " << track->audioFrame->sample_rate
+                                      << " linesize: " << track->audioFrame->linesize[0] << " size: " << track->audioPacket->size);
 
-                if (track->lastDecodedAudio == AV_NOPTS_VALUE && frameFinished
-                    && track->audioFrame->pkt_dts != AV_NOPTS_VALUE)
+                if (track->lastDecodedAudio == AV_NOPTS_VALUE && frameFinished && track->audioFrame->pkt_dts != AV_NOPTS_VALUE)
                 {
-                    track->bufferStart =
-                        int64_t((track->audioFrame->pkt_dts * timebase
-                                 * m_info.audioSampleRate)
-                                + 0.49);
-                    track->bufferEnd =
-                        track->bufferStart + track->bufferLength - 1;
+                    track->bufferStart = int64_t((track->audioFrame->pkt_dts * timebase * m_info.audioSampleRate) + 0.49);
+                    track->bufferEnd = track->bufferStart + track->bufferLength - 1;
                     track->lastDecodedAudio = track->bufferStart - 1;
 
-                    DBL(DB_AUDIO,
-                        "last: " << track->lastDecodedAudio
-                                 << " bufferStart: " << track->bufferStart
-                                 << " bufferEnd: " << track->bufferEnd
-                                 << " bufferLength: " << track->bufferLength
-                                 << " start: " << track->start
-                                 << " desired: " << track->desired);
+                    DBL(DB_AUDIO, "last: " << track->lastDecodedAudio << " bufferStart: " << track->bufferStart
+                                           << " bufferEnd: " << track->bufferEnd << " bufferLength: " << track->bufferLength
+                                           << " start: " << track->start << " desired: " << track->desired);
 
                     if (track->bufferStart > track->start + track->desired)
                         return track->desired;
@@ -3612,14 +3453,10 @@ namespace TwkMovie
         return collected;
     }
 
-    FrameBuffer* MovieFFMpegReader::configureYUVPlanes(
-        FrameBuffer::DataType dataType, int width, int height, int rowSpan,
-        int rowSpanUV, int usampling, int vsampling, bool addAlpha,
-        FrameBuffer::Orientation orientation)
+    FrameBuffer* MovieFFMpegReader::configureYUVPlanes(FrameBuffer::DataType dataType, int width, int height, int rowSpan, int rowSpanUV,
+                                                       int usampling, int vsampling, bool addAlpha, FrameBuffer::Orientation orientation)
     {
-        DBL(DB_VIDEO, "dataType: " << dataType << " rowSpan: " << rowSpan
-                                   << " rowSpanUV: " << rowSpanUV
-                                   << " usampling: " << usampling
+        DBL(DB_VIDEO, "dataType: " << dataType << " rowSpan: " << rowSpan << " rowSpanUV: " << rowSpanUV << " usampling: " << usampling
                                    << " vsampling: " << vsampling);
 
         //
@@ -3628,20 +3465,16 @@ namespace TwkMovie
         //
 
         int rowModulo = 8;
-        int extraScanlines =
-            height % rowModulo == 0 ? 0 : (rowModulo - height % rowModulo);
+        int extraScanlines = height % rowModulo == 0 ? 0 : (rowModulo - height % rowModulo);
         int colWidth = (dataType == FrameBuffer::UCHAR) ? 1 : 2;
         int extraScanlinePixels = rowSpan / colWidth - width;
 
         DBL(DB_VIDEO,
-            "rowModulo: " << rowModulo << " extraScanlines: " << extraScanlines
-                          << " extraScanlinePixels: " << extraScanlinePixels);
+            "rowModulo: " << rowModulo << " extraScanlines: " << extraScanlines << " extraScanlinePixels: " << extraScanlinePixels);
 
         FrameBuffer::StringVector YChannelName(1, "Y");
-        FrameBuffer* Y =
-            new FrameBuffer(FrameBuffer::PixelCoordinates, width, height, 0, 1,
-                            dataType, NULL, &YChannelName, orientation, true,
-                            extraScanlines, extraScanlinePixels);
+        FrameBuffer* Y = new FrameBuffer(FrameBuffer::PixelCoordinates, width, height, 0, 1, dataType, NULL, &YChannelName, orientation,
+                                         true, extraScanlines, extraScanlinePixels);
 
         //
         // Divide the width and height of the source resultion by the respective
@@ -3653,26 +3486,19 @@ namespace TwkMovie
 
         int uvWidth = (width + usampling - 1) / usampling;
         int uvHeight = (height + vsampling - 1) / vsampling;
-        int uvExtraScanlines =
-            uvHeight % rowModulo == 0 ? 0 : rowModulo - (uvHeight % rowModulo);
+        int uvExtraScanlines = uvHeight % rowModulo == 0 ? 0 : rowModulo - (uvHeight % rowModulo);
         int uvExtraScanlinePixels = rowSpanUV / colWidth - uvWidth;
 
-        DBL(DB_VIDEO,
-            "uvWidth: " << uvWidth << " uvHeight: " << uvHeight
-                        << " uvExtraScanlines: " << uvExtraScanlines
-                        << " uvExtraScanlinePixels: " << uvExtraScanlinePixels);
+        DBL(DB_VIDEO, "uvWidth: " << uvWidth << " uvHeight: " << uvHeight << " uvExtraScanlines: " << uvExtraScanlines
+                                  << " uvExtraScanlinePixels: " << uvExtraScanlinePixels);
 
         FrameBuffer::StringVector UChannelName(1, "U");
-        FrameBuffer* U =
-            new FrameBuffer(FrameBuffer::PixelCoordinates, uvWidth, uvHeight, 0,
-                            1, dataType, NULL, &UChannelName, orientation, true,
-                            uvExtraScanlines, uvExtraScanlinePixels);
+        FrameBuffer* U = new FrameBuffer(FrameBuffer::PixelCoordinates, uvWidth, uvHeight, 0, 1, dataType, NULL, &UChannelName, orientation,
+                                         true, uvExtraScanlines, uvExtraScanlinePixels);
 
         FrameBuffer::StringVector VChannelName(1, "V");
-        FrameBuffer* V =
-            new FrameBuffer(FrameBuffer::PixelCoordinates, uvWidth, uvHeight, 0,
-                            1, dataType, NULL, &VChannelName, orientation, true,
-                            uvExtraScanlines, uvExtraScanlinePixels);
+        FrameBuffer* V = new FrameBuffer(FrameBuffer::PixelCoordinates, uvWidth, uvHeight, 0, 1, dataType, NULL, &VChannelName, orientation,
+                                         true, uvExtraScanlines, uvExtraScanlinePixels);
 
         Y->appendPlane(U);
         Y->appendPlane(V);
@@ -3680,20 +3506,15 @@ namespace TwkMovie
         if (addAlpha)
         {
             FrameBuffer::StringVector AChannelName(1, "A");
-            FrameBuffer* A =
-                new FrameBuffer(FrameBuffer::PixelCoordinates, width, height, 0,
-                                1, dataType, NULL, &AChannelName, orientation,
-                                true, extraScanlines, extraScanlinePixels);
+            FrameBuffer* A = new FrameBuffer(FrameBuffer::PixelCoordinates, width, height, 0, 1, dataType, NULL, &AChannelName, orientation,
+                                             true, extraScanlines, extraScanlinePixels);
             Y->appendPlane(A);
         }
 
         return Y;
     }
 
-    void MovieFFMpegReader::seekToFrame(const int inframe,
-                                        const double frameDur,
-                                        AVStream* videoStream,
-                                        VideoTrack* track)
+    void MovieFFMpegReader::seekToFrame(const int inframe, const double frameDur, AVStream* videoStream, VideoTrack* track)
     {
 #if DB_TIMING & DB_LEVEL
         m_timingDetails->startTimer("seek");
@@ -3702,32 +3523,30 @@ namespace TwkMovie
         // Before FFmpeg 6, the offset was 1 frame. Let's keep that assumption
         // for now. Note: FFmpeg internally seeks with the dts timestamp and not
         // the pts timestamp. We need to have a bit of a buffer.
-        const int64_t seekTarget =
-            int64_t((inframe - rv_seek_frame_offset) * frameDur);
+        const int64_t seekTarget = int64_t((inframe - rv_seek_frame_offset) * frameDur);
 
-        DBL(DB_VIDEO, "seekTarget: " << seekTarget
-                                     << " last: " << track->lastDecodedVideo
-                                     << " inMinus1: " << inframe - 1);
+        DBL(DB_VIDEO, "seekTarget: " << seekTarget << " last: " << track->lastDecodedVideo << " inMinus1: " << inframe - 1);
 
         avcodec_send_packet(track->avCodecContext, nullptr);
 
         int ret;
-        while ((ret = avcodec_receive_frame(track->avCodecContext,
-                                            track->videoFrame))
-               != AVERROR_EOF)
+#if defined(RV_USE_APPLE_PRORES_SDK)
+        // For ProRes, because it's i-Frames only, we don't need to
+        // do this loop and also don't want to call FFmpeg's decoder
+        if (!track->useAppleProRes)
+#endif
         {
-            // Discard received frames until the end of the stream is reached
+            while ((ret = avcodec_receive_frame(track->avCodecContext, track->videoFrame)) != AVERROR_EOF)
+            {
+                // Discard received frames until the end of the stream is reached
+            }
         }
 
         avcodec_flush_buffers(track->avCodecContext);
-        if (av_seek_frame(m_avFormatContext, track->number, seekTarget,
-                          AVSEEK_FLAG_BACKWARD)
-            < 0)
+        if (av_seek_frame(m_avFormatContext, track->number, seekTarget, AVSEEK_FLAG_BACKWARD) < 0)
         {
             // Try from the start if targeted seek fails
-            if (av_seek_frame(m_avFormatContext, -1,
-                              m_avFormatContext->start_time, 0)
-                < 0)
+            if (av_seek_frame(m_avFormatContext, -1, m_avFormatContext->start_time, 0) < 0)
             {
                 TWK_THROW_EXC_STREAM("av_seek_frame failed in video stream.");
             }
@@ -3746,16 +3565,14 @@ namespace TwkMovie
 #endif
     }
 
-    bool MovieFFMpegReader::readPacketFromStream(const int inframe,
-                                                 VideoTrack* track)
+    bool MovieFFMpegReader::readPacketFromStream(const int inframe, VideoTrack* track)
     {
         bool finalPacket = false;
 
         // Loop to make sure we only read from the correct AVStream
         do
         {
-            DBL(DB_VIDEO, "freeing video packet from stream: "
-                              << track->videoPacket->stream_index);
+            DBL(DB_VIDEO, "freeing video packet from stream: " << track->videoPacket->stream_index);
             av_packet_unref(track->videoPacket);
             HOP_PROF("av_read_frame()");
             if (av_read_frame(m_avFormatContext, track->videoPacket) < 0)
@@ -3768,20 +3585,17 @@ namespace TwkMovie
                 }
                 else
                 {
-                    TWK_THROW_EXC_STREAM(
-                        "av_read_frame failed in video stream.");
+                    TWK_THROW_EXC_STREAM("av_read_frame failed in video stream.");
                 }
             }
 #if DB_LEVEL & DB_SUBTITLES
-            if (m_subtitleMap.find(track->videoPacket->stream_index)
-                    != m_subtitleMap.end()
+            if (m_subtitleMap.find(track->videoPacket->stream_index) != m_subtitleMap.end()
                 && correctLang(track->videoPacket->stream_index))
             {
                 readSubtitle(track);
             }
 #endif
-        } while ((track->videoPacket->stream_index != track->number)
-                 && !finalPacket);
+        } while ((track->videoPacket->stream_index != track->number) && !finalPacket);
 
         // If we get a valid timestamp here then we should add it to
         // the track's list of nearby timestamps.
@@ -3792,8 +3606,7 @@ namespace TwkMovie
 
 #if DB_LEVEL & DB_VIDEO
         ostringstream tss;
-        for (set<int64_t>::iterator p = track->tsSet.begin();
-             p != track->tsSet.end(); p++)
+        for (set<int64_t>::iterator p = track->tsSet.begin(); p != track->tsSet.end(); p++)
         {
             tss << " " << *p;
         }
@@ -3806,7 +3619,11 @@ namespace TwkMovie
     void MovieFFMpegReader::sendPacketToDecoder(VideoTrack* track)
     {
         int ret =
-            avcodec_send_packet(track->avCodecContext, track->videoPacket);
+#if defined(RV_USE_APPLE_PRORES_SDK)
+            track->useAppleProRes ? track->appleProResCtx.decode_frame(track->avCodecContext, track->videoFrame, track->videoPacket) :
+#endif
+                                  avcodec_send_packet(track->avCodecContext, track->videoPacket);
+
         if (ret < 0)
         {
             if (ret == AVERROR(EAGAIN))
@@ -3814,26 +3631,23 @@ namespace TwkMovie
                 // This occurs when we need to read more output before sending a
                 // new one. However, since we fully drain the output in each
                 // decode call, this should never happen.
-                TWK_THROW_EXC_STREAM("avcodec_send_packet failed in video "
+                TWK_THROW_EXC_STREAM("sendPacketToDecoder failed in video "
                                      "stream: AVERROR(EAGAIN)");
             }
             else
             {
-                TWK_THROW_EXC_STREAM(
-                    "avcodec_send_packet failed in video stream");
+                TWK_THROW_EXC_STREAM("sendPacketToDecoder failed in video stream");
             }
         }
     }
 
-    FrameBuffer* MovieFFMpegReader::jpeg2000Decode(int inframe,
-                                                   VideoTrack* track)
+    FrameBuffer* MovieFFMpegReader::jpeg2000Decode(int inframe, VideoTrack* track)
     {
 
         AVPacket* pkt = track->videoPacket;
         if (!pkt || pkt->size <= 0)
         {
-            TWK_THROW_EXC_STREAM("No valid JPEG-2000 packet found for frame "
-                                 << inframe);
+            TWK_THROW_EXC_STREAM("No valid JPEG-2000 packet found for frame " << inframe);
         }
 
         ojph::mem_infile infile;
@@ -3842,10 +3656,7 @@ namespace TwkMovie
         return decodeHTJ2K(&infile);
     }
 
-    bool MovieFFMpegReader::findImageWithBestTimestamp(int inframe,
-                                                       double frameDur,
-                                                       AVStream* videoStream,
-                                                       VideoTrack* track)
+    bool MovieFFMpegReader::findImageWithBestTimestamp(int inframe, double frameDur, AVStream* videoStream, VideoTrack* track)
     {
         // The goal timestamp is the same as the seek target adjusted
         // for pts vs dts.
@@ -3859,9 +3670,11 @@ namespace TwkMovie
             readPacketFromStream(inframe, track);
 
             // Then we need to send the packet as input to the decoder.
-            // but we dont do it we are using OpenJPH, since it will
-            // handle the decode itself.
-            if (!track->useOpenJPH)
+            // but we don't do it if we are using OpenJPH or Apple's ProRes
+            // since they will handle the decode themselves and ProRes
+            // is I-frame only so doesn't need other frames for decoding
+            // so let's not waste time decoding here.
+            if (!track->useOpenJPH && !track->useAppleProRes)
             {
                 sendPacketToDecoder(track);
             }
@@ -3876,21 +3689,22 @@ namespace TwkMovie
             HOP_PROF("avcodec_receive_frame()");
             // Get frame from decoder.
             int ret = 0;
-            if (!track->useOpenJPH)
+            if (!track->useOpenJPH && !track->useAppleProRes)
             {
-                ret = avcodec_receive_frame(track->avCodecContext,
-                                            track->videoFrame);
+                ret = avcodec_receive_frame(track->avCodecContext, track->videoFrame);
             }
             else
             {
-                // We are going to use OpenJPH to do the decoding, but we do
-                // need to set the pts and dts from the packet, to get things
-                // behaving properly.
+                // We are going to use OpenJPH or Apple's SDK  to do the decoding, but we do
+                // need to set the pts and dts from the packet, to get things behaving properly.
                 track->videoFrame->pts = track->videoPacket->pts;
                 track->videoFrame->pkt_dts = track->videoPacket->dts;
                 if (track->videoFrame->pkt_dts < goalTS)
+                {
+                    av_packet_unref(track->videoPacket);
                     ret = AVERROR(EAGAIN); // Force it to read another packet,
                                            // if we havent found the frame yet.
+                }
             }
             if (ret < 0)
             {
@@ -3902,9 +3716,9 @@ namespace TwkMovie
 
                     readPacketFromStream(inframe, track);
 
-                    // If we are using OpenJPH, we will not send the packet to
-                    // the decoder, since it will handle the decode itself.
-                    if (!track->useOpenJPH)
+                    // If we are using OpenJPH or Apple's ProRes SDK, we will not send
+                    // the packet to the decoder, since they will handle the decode themselves.
+                    if (!track->useOpenJPH && !track->useAppleProRes)
                     {
                         sendPacketToDecoder(track);
                     }
@@ -3925,8 +3739,7 @@ namespace TwkMovie
                 // represents for RV.
                 const int64_t pktPTS = track->videoFrame->pts;
                 const int64_t pktDTS = track->videoFrame->pkt_dts;
-                const int64_t lastTS =
-                    (pktPTS == AV_NOPTS_VALUE) ? pktDTS : pktPTS;
+                const int64_t lastTS = (pktPTS == AV_NOPTS_VALUE) ? pktDTS : pktPTS;
                 track->lastDecodedVideo = int(double(lastTS) / frameDur + 1.49);
 
                 // If the last timestamp is now equal to or greater than either
@@ -3935,28 +3748,19 @@ namespace TwkMovie
                 searching = (lastTS < bestTS);
 
 #if DB_VIDEO & DB_LEVEL
-                int64_t startPTS = (videoStream->start_time != AV_NOPTS_VALUE)
-                                       ? videoStream->start_time
-                                       : 0;
+                int64_t startPTS = (videoStream->start_time != AV_NOPTS_VALUE) ? videoStream->start_time : 0;
 #endif
-                DBL(DB_VIDEO, "frameDur: " << frameDur
-                                           << " startPTS: " << startPTS
-                                           << " done: " << int(searching));
-                DBL(DB_VIDEO,
-                    "pktPTS: " << pktPTS << " pktDTS: " << pktDTS
-                               << " goalTS: " << goalTS << " goal: "
-                               << int(double(goalTS) / frameDur + 1.49)
-                               << " bestTS: " << bestTS << " best: "
-                               << int(double(bestTS) / frameDur + 1.49)
-                               << " lastTS: " << lastTS
-                               << " last: " << track->lastDecodedVideo);
+                DBL(DB_VIDEO, "frameDur: " << frameDur << " startPTS: " << startPTS << " done: " << int(searching));
+                DBL(DB_VIDEO, "pktPTS: " << pktPTS << " pktDTS: " << pktDTS << " goalTS: " << goalTS
+                                         << " goal: " << int(double(goalTS) / frameDur + 1.49) << " bestTS: " << bestTS
+                                         << " best: " << int(double(bestTS) / frameDur + 1.49) << " lastTS: " << lastTS
+                                         << " last: " << track->lastDecodedVideo);
             }
         }
         return true;
     }
 
-    FrameBuffer* MovieFFMpegReader::decodeImageAtFrame(int inframe,
-                                                       VideoTrack* track)
+    FrameBuffer* MovieFFMpegReader::decodeImageAtFrame(int inframe, VideoTrack* track)
     {
         if (m_mustReadFirstFrame)
         {
@@ -3978,17 +3782,12 @@ namespace TwkMovie
 
         AVStream* videoStream = m_avFormatContext->streams[track->number];
         AVCodecContext* videoCodecContext = track->avCodecContext;
-        double frameDur = double(videoStream->time_base.den)
-                          / (double(videoStream->time_base.num) * m_info.fps);
+        double frameDur = double(videoStream->time_base.den) / (double(videoStream->time_base.num) * m_info.fps);
 
-        DBL(DB_VIDEO, "stream duration: "
-                          << videoStream->duration
-                          << " num frames: " << videoStream->nb_frames
-                          << " time base: " << av_q2d(videoStream->time_base)
-                          << " (" << videoStream->time_base.num << "/"
-                          << videoStream->time_base.den
-                          << ") start time: " << videoStream->start_time
-                          << " frameDur: " << frameDur);
+        DBL(DB_VIDEO, "stream duration: " << videoStream->duration << " num frames: " << videoStream->nb_frames
+                                          << " time base: " << av_q2d(videoStream->time_base) << " (" << videoStream->time_base.num << "/"
+                                          << videoStream->time_base.den << ") start time: " << videoStream->start_time
+                                          << " frameDur: " << frameDur);
 
         // Seek to requested frame if necessary
         // If this is not the frame after the last one we decoded then we need
@@ -4003,12 +3802,8 @@ namespace TwkMovie
         // videoCodecContext->gop_size because it is initialized by default by
         // FFmpeg with a default value of 12 even for intra-frame compression
         // codecs (such as Apple Pro Res for example).
-        const int nearFrameThreshold =
-            (m_info.slowRandomAccess && videoCodecContext->gop_size != 0)
-                ? videoCodecContext->gop_size
-                : 1;
-        if (track->lastDecodedVideo == -1 || track->lastDecodedVideo >= inframe
-            || track->lastDecodedVideo < (inframe - nearFrameThreshold))
+        const int nearFrameThreshold = (m_info.slowRandomAccess && videoCodecContext->gop_size != 0) ? videoCodecContext->gop_size : 1;
+        if (track->lastDecodedVideo == -1 || track->lastDecodedVideo >= inframe || track->lastDecodedVideo < (inframe - nearFrameThreshold))
         {
             seekToFrame(inframe, frameDur, videoStream, track);
         }
@@ -4021,14 +3816,12 @@ namespace TwkMovie
         m_timingDetails->startTimer("decode");
 #endif
 
-        const bool frameFinished =
-            findImageWithBestTimestamp(inframe, frameDur, videoStream, track);
+        const bool frameFinished = findImageWithBestTimestamp(inframe, frameDur, videoStream, track);
 
         // Remove earlier timestamps
         int64_t prune = (inframe - 2) * frameDur;
         set<int64_t>::iterator pruneIT;
-        for (pruneIT = track->tsSet.begin(); pruneIT != track->tsSet.end();
-             pruneIT++)
+        for (pruneIT = track->tsSet.begin(); pruneIT != track->tsSet.end(); pruneIT++)
         {
             if (*pruneIT > prune)
             {
@@ -4045,19 +3838,23 @@ namespace TwkMovie
             // the frame here and return the FrameBuffer.
             return jpeg2000Decode(inframe, track);
         }
+        else if (track->useAppleProRes)
+        {
+            // Decode the image now since we skipped decoding while
+            // searching for the best frame
+            sendPacketToDecoder(track);
+        }
 
 #if DB_TIMING & DB_LEVEL
         double decodeDuration = m_timingDetails->pauseTimer("decode");
-        DBL(DB_TIMING,
-            "frame: " << inframe << " decodeTime: " << decodeDuration);
+        DBL(DB_TIMING, "frame: " << inframe << " decodeTime: " << decodeDuration);
 #endif
 
         const int width = (track->rotate) ? m_info.height : m_info.width;
         const int height = (track->rotate) ? m_info.width : m_info.height;
 
         // Did we get what we came here for?
-        if (!frameFinished || track->videoFrame->width < width
-            || track->videoFrame->height < height)
+        if (!frameFinished || track->videoFrame->width < width || track->videoFrame->height < height)
         {
             TWK_THROW_EXC_STREAM("Unable to get frame at: " << inframe);
         }
@@ -4078,8 +3875,7 @@ namespace TwkMovie
         AVFrame* videoFrame = track->videoFrame;
         int result = 0;
 
-        HardwareContext* hardwareContext =
-            static_cast<HardwareContext*>(track->avCodecContext->opaque);
+        HardwareContext* hardwareContext = static_cast<HardwareContext*>(track->avCodecContext->opaque);
 
         if (hardwareContext != nullptr)
         {
@@ -4089,12 +3885,10 @@ namespace TwkMovie
             {
                 // retrieve data from GPU to CPU
                 softwareFrame = av_frame_alloc();
-                result = av_hwframe_transfer_data(softwareFrame,
-                                                  track->videoFrame, 0);
+                result = av_hwframe_transfer_data(softwareFrame, track->videoFrame, 0);
                 if (result < 0)
                 {
-                    std::cerr
-                        << "ERROR: Failed to transfer data to system memory\n";
+                    std::cerr << "ERROR: Failed to transfer data to system memory\n";
                 }
                 videoFrame = softwareFrame;
             }
@@ -4114,16 +3908,15 @@ namespace TwkMovie
         const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(nativeFormat);
         if (!desc && nativeFormat == AV_PIX_FMT_NONE)
         {
-            static bool warned = false;
-            if (!warned)
-            {
-                std::cout << "WARNING: FFmpeg detected pixel format "
-                             "AV_PIX_FMT_NONE for frames in "
-                          << m_filename << ". Using fallback pixel format: "
-                          << av_get_pix_fmt_name(m_pxlFormatOnOpen)
-                          << std::endl;
-                warned = true;
-            }
+            static std::once_flag warnOnce;
+            std::call_once(warnOnce,
+                           [this]()
+                           {
+                               std::cout << "WARNING: FFmpeg detected pixel format "
+                                            "AV_PIX_FMT_NONE for frames in "
+                                         << m_filename << ". Using fallback pixel format: " << av_get_pix_fmt_name(m_pxlFormatOnOpen)
+                                         << std::endl;
+                           });
             // Use the pixel format detected when the file was opened as a
             // fallback. Assumes that m_pxlFormatOnOpen is set because the file
             // was opened.
@@ -4138,12 +3931,10 @@ namespace TwkMovie
         bool isPlanar = (desc->flags & AV_PIX_FMT_FLAG_PLANAR);
         bool isRGB = (desc->flags & AV_PIX_FMT_FLAG_RGB);
         bool convertFormat = false;
-        FrameBuffer::DataType dataType =
-            (bitSize > 8) ? FrameBuffer::USHORT : FrameBuffer::UCHAR;
+        FrameBuffer::DataType dataType = (bitSize > 8) ? FrameBuffer::USHORT : FrameBuffer::UCHAR;
         FrameBuffer::StringVector chans(3);
         FrameBuffer* out = 0;
-        av_image_fill_arrays(outFrame->data, outFrame->linesize, nullptr,
-                             nativeFormat, width, height, 1 /*align*/);
+        av_image_fill_arrays(outFrame->data, outFrame->linesize, nullptr, nativeFormat, width, height, 1 /*align*/);
 
         // Note: We're about to use offset_plus1 here to derive the RGB channel
         // ordering. Here is the definition of offset_plus1 according to the
@@ -4164,9 +3955,7 @@ namespace TwkMovie
             chans.resize(4);
             {
                 const int maxOffset = static_cast<int>(chans.size()) - 1;
-                int offset3 =
-                    max(0, min(maxOffset,
-                               desc->comp[3].offset / nbElementsPerChannel));
+                int offset3 = max(0, min(maxOffset, desc->comp[3].offset / nbElementsPerChannel));
                 chans[offset3] = "A";
             }
         case AV_PIX_FMT_RGB48:
@@ -4175,18 +3964,14 @@ namespace TwkMovie
         case AV_PIX_FMT_BGR24:
         {
             const int maxOffset = static_cast<int>(chans.size()) - 1;
-            int offset0 = max(
-                0, min(maxOffset, desc->comp[0].offset / nbElementsPerChannel));
-            int offset1 = max(
-                0, min(maxOffset, desc->comp[1].offset / nbElementsPerChannel));
-            int offset2 = max(
-                0, min(maxOffset, desc->comp[2].offset / nbElementsPerChannel));
+            int offset0 = max(0, min(maxOffset, desc->comp[0].offset / nbElementsPerChannel));
+            int offset1 = max(0, min(maxOffset, desc->comp[1].offset / nbElementsPerChannel));
+            int offset2 = max(0, min(maxOffset, desc->comp[2].offset / nbElementsPerChannel));
             chans[offset0] = "R";
             chans[offset1] = "G";
             chans[offset2] = "B";
         }
-            out = new FrameBuffer(width, height, chans.size(), dataType, NULL,
-                                  &chans);
+            out = new FrameBuffer(width, height, chans.size(), dataType, NULL, &chans);
             break;
         default:
             nativeFormat = getBestRVFormat(nativeFormat);
@@ -4199,18 +3984,14 @@ namespace TwkMovie
                 av_pix_fmt_get_chroma_sub_sample(nativeFormat, &log2w, &log2h);
                 int usampling = int(pow(2.0f, log2w));
                 int vsampling = int(pow(2.0f, log2h));
-                out = configureYUVPlanes(
-                    dataType, width, height, outFrame->linesize[0],
-                    outFrame->linesize[1], usampling, vsampling, hasAlpha,
-                    track->fb.orientation());
+                out = configureYUVPlanes(dataType, width, height, outFrame->linesize[0], outFrame->linesize[1], usampling, vsampling,
+                                         hasAlpha, track->fb.orientation());
             }
             else
             {
                 convertFormat = true;
-                av_image_fill_arrays(outFrame->data, outFrame->linesize, 0,
-                                     nativeFormat, width, height, 1);
-                out = new FrameBuffer(width, height, (hasAlpha) ? 4 : 3,
-                                      dataType);
+                av_image_fill_arrays(outFrame->data, outFrame->linesize, 0, nativeFormat, width, height, 1);
+                out = new FrameBuffer(width, height, (hasAlpha) ? 4 : 3, dataType);
             }
             break;
         }
@@ -4228,8 +4009,7 @@ namespace TwkMovie
 #endif
 
         // Copy decoded video frame to output frame
-        copyFrame(videoFrame, outFrame, width, height, convertFormat,
-                  track->imgConvertContext);
+        copyFrame(videoFrame, outFrame, width, height, convertFormat, track->imgConvertContext);
 
 #if DB_TIMING & DB_LEVEL
         double duration = m_timingDetails->pauseTimer("copyFrame");
@@ -4253,29 +4033,20 @@ namespace TwkMovie
             FrameBuffer* V = U->nextPlane();
 
             FrameBuffer::StringVector YChannelName(1, "Y");
-            FrameBuffer* Yrot =
-                new FrameBuffer(FrameBuffer::PixelCoordinates, Y->height(),
-                                Y->width(), 0, 1, dataType, NULL, &YChannelName,
-                                track->fb.orientation(), true, 0, 0);
+            FrameBuffer* Yrot = new FrameBuffer(FrameBuffer::PixelCoordinates, Y->height(), Y->width(), 0, 1, dataType, NULL, &YChannelName,
+                                                track->fb.orientation(), true, 0, 0);
 
             FrameBuffer::StringVector UChannelName(1, "U");
-            FrameBuffer* Urot =
-                new FrameBuffer(FrameBuffer::PixelCoordinates, U->height(),
-                                U->width(), 0, 1, dataType, NULL, &UChannelName,
-                                track->fb.orientation(), true, 0, 0);
+            FrameBuffer* Urot = new FrameBuffer(FrameBuffer::PixelCoordinates, U->height(), U->width(), 0, 1, dataType, NULL, &UChannelName,
+                                                track->fb.orientation(), true, 0, 0);
 
             FrameBuffer::StringVector VChannelName(1, "V");
-            FrameBuffer* Vrot =
-                new FrameBuffer(FrameBuffer::PixelCoordinates, V->height(),
-                                V->width(), 0, 1, dataType, NULL, &VChannelName,
-                                track->fb.orientation(), true, 0, 0);
+            FrameBuffer* Vrot = new FrameBuffer(FrameBuffer::PixelCoordinates, V->height(), V->width(), 0, 1, dataType, NULL, &VChannelName,
+                                                track->fb.orientation(), true, 0, 0);
 
-            rowColumnSwap(Y->pixels<unsigned char>(), Y->width(), Y->height(),
-                          Yrot->pixels<unsigned char>());
-            rowColumnSwap(U->pixels<unsigned char>(), U->width(), U->height(),
-                          Urot->pixels<unsigned char>());
-            rowColumnSwap(V->pixels<unsigned char>(), V->width(), V->height(),
-                          Vrot->pixels<unsigned char>());
+            rowColumnSwap(Y->pixels<unsigned char>(), Y->width(), Y->height(), Yrot->pixels<unsigned char>());
+            rowColumnSwap(U->pixels<unsigned char>(), U->width(), U->height(), Urot->pixels<unsigned char>());
+            rowColumnSwap(V->pixels<unsigned char>(), V->width(), V->height(), Vrot->pixels<unsigned char>());
 
             Yrot->appendPlane(Urot);
             Yrot->appendPlane(Vrot);
@@ -4293,8 +4064,7 @@ namespace TwkMovie
             AVStream* tsStream = m_avFormatContext->streams[m_timecodeTrack];
             AVDictionaryEntry* tcEntry;
             tcEntry = av_dict_get(tsStream->metadata, "timecode", NULL, 0);
-            AVRational rate = {tsStream->time_base.den,
-                               tsStream->time_base.num};
+            AVRational rate = {tsStream->time_base.den, tsStream->time_base.num};
 
             if (isMOVformat(m_avFormatContext))
             {
@@ -4309,8 +4079,7 @@ namespace TwkMovie
             }
 
             AVTimecode avTimecode;
-            av_timecode_init_from_string(&avTimecode, rate, tcEntry->value,
-                                         m_avFormatContext);
+            av_timecode_init_from_string(&avTimecode, rate, tcEntry->value, m_avFormatContext);
             char tcString[80];
             av_timecode_make_string(&avTimecode, tcString, inframe - 1);
             track->fb.attribute<string>("Timecode") = string(tcString);
@@ -4319,8 +4088,7 @@ namespace TwkMovie
         return out;
     }
 
-    void MovieFFMpegReader::imagesAtFrame(const ReadRequest& request,
-                                          FrameBufferVector& fbs)
+    void MovieFFMpegReader::imagesAtFrame(const ReadRequest& request, FrameBufferVector& fbs)
     {
         int64_t inframe = request.frame;
         if (inframe < m_info.start)
@@ -4345,12 +4113,10 @@ namespace TwkMovie
         {
             VideoTrack* track = m_videoTracks[i];
             ContextPool::Reservation reserve(this, track->number);
-            track->isOpen = openAVCodec(track->number, &track->avCodecContext,
-                                        &track->hardwareContext);
+            track->isOpen = openAVCodec(track->number, &track->avCodecContext, &track->hardwareContext);
             if (!track->isOpen)
             {
-                cout << "ERROR: Unable to read from audio stream: "
-                     << track->number << endl;
+                cout << "ERROR: Unable to read from video stream: " << track->number << endl;
                 continue;
             }
 
@@ -4376,6 +4142,13 @@ namespace TwkMovie
 
             if (!found)
                 continue;
+#if defined(RV_USE_APPLE_PRORES_SDK)
+            if (track->useAppleProRes)
+            {
+                track->avCodecContext->sw_pix_fmt = track->appleProResCtx.avPixelFormat;
+                track->avCodecContext->pix_fmt = track->appleProResCtx.avPixelFormat;
+            }
+#endif
 
             FrameBuffer* out = decodeImageAtFrame(decodeFrame, track);
             fbs.push_back(out);
@@ -4390,8 +4163,7 @@ namespace TwkMovie
 
 #if DB_TIMING & DB_LEVEL
         double loopDuration = m_timingDetails->pauseTimer("imagesAtFrame");
-        DBL(DB_TIMING,
-            "frame: " << inframe << " imagesAtFrame time: " << loopDuration);
+        DBL(DB_TIMING, "frame: " << inframe << " imagesAtFrame time: " << loopDuration);
 #endif
 
         DBL(DB_VIDEO, "Got a frame and buggin' out!!!\n");
@@ -4442,8 +4214,7 @@ namespace TwkMovie
         //    }
     }
 
-    void MovieFFMpegReader::identifiersAtFrame(const ReadRequest& request,
-                                               IdentifierVector& ids)
+    void MovieFFMpegReader::identifiersAtFrame(const ReadRequest& request, IdentifierVector& ids)
     {
         int frame = request.frame;
         if (frame < m_info.start)
@@ -4503,9 +4274,7 @@ namespace TwkMovie
         o << frame << ":" << m_filename;
     }
 
-    template <typename T>
-    int MovieFFMpegReader::translateAVAudio(AudioTrack* track, double maximum,
-                                            int offset)
+    template <typename T> int MovieFFMpegReader::translateAVAudio(AudioTrack* track, double maximum, int offset)
     {
         //
         // This templated method handles planar and non-planar audio collecting
@@ -4532,8 +4301,7 @@ namespace TwkMovie
         SampleTime goalEnd = track->start + track->desired - 1;
         int channels = track->numChannels;
         int skipSamples = goalStart - track->bufferStart;
-        int desired = track->bufferLength - skipSamples
-                      - max(int(track->bufferEnd - goalEnd), 0);
+        int desired = track->bufferLength - skipSamples - max(int(track->bufferEnd - goalEnd), 0);
         const int numPlanes = (planar) ? channels : 1;
         int chansPerPlane = (planar) ? 1 : channels;
         vector<T*> framePointers(numPlanes);
@@ -4543,14 +4311,10 @@ namespace TwkMovie
             framePointers[ch] += skipSamples * chansPerPlane;
         }
 
-        DBL(DB_AUDIO,
-            "track: " << track->number << " is_planar: " << planar
-                      << " goalStart: " << goalStart << " goalEnd: " << goalEnd
-                      << " bufStart: " << track->bufferStart
-                      << " bufEnd: " << track->bufferEnd << " bufferLength: "
-                      << track->bufferLength << " skipSamples: " << skipSamples
-                      << " desired: " << desired
-                      << " chmap: " << m_audioState->chmap.size());
+        DBL(DB_AUDIO, "track: " << track->number << " is_planar: " << planar << " goalStart: " << goalStart << " goalEnd: " << goalEnd
+                                << " bufStart: " << track->bufferStart << " bufEnd: " << track->bufferEnd
+                                << " bufferLength: " << track->bufferLength << " skipSamples: " << skipSamples << " desired: " << desired
+                                << " chmap: " << m_audioState->chmap.size());
 
         float typeFactor = (offset != 0) ? 2.0 / maximum : 1.0 / maximum;
         float* outBuffer = track->bufferPointer;
@@ -4564,13 +4328,10 @@ namespace TwkMovie
                 {
                     int p = (planar) ? och : 0;
                     int chIdx = (och - p) + (s * chansPerPlane);
-                    const float sample =
-                        float(framePointers[p][chIdx] - (T)offset) * typeFactor;
+                    const float sample = float(framePointers[p][chIdx] - (T)offset) * typeFactor;
                     (*outBuffer++) = sample;
 
-                    DBL(DB_AUDIO_SAMPLES, "sample(" << p << "/" << och << "/"
-                                                    << chIdx
-                                                    << "): " << sample);
+                    DBL(DB_AUDIO_SAMPLES, "sample(" << p << "/" << och << "/" << chIdx << "): " << sample);
                 }
             }
         }
@@ -4580,8 +4341,7 @@ namespace TwkMovie
             {
                 for (int och = 0; och < m_audioState->channels.size(); och++)
                 {
-                    const ChannelMixState& cmixState =
-                        m_audioState->chmap[m_audioState->channels[och]];
+                    const ChannelMixState& cmixState = m_audioState->chmap[m_audioState->channels[och]];
 
                     float lMix = 0.0f;
                     const std::vector<ChannelState>& leftChs = cmixState.lefts;
@@ -4590,33 +4350,24 @@ namespace TwkMovie
                         const ChannelState& chState = leftChs[n];
                         int p = (planar) ? chState.index : 0;
                         int chIdx = (chState.index - p) + (s * chansPerPlane);
-                        const float sample =
-                            float(framePointers[p][chIdx] - (T)offset)
-                            * typeFactor;
+                        const float sample = float(framePointers[p][chIdx] - (T)offset) * typeFactor;
                         lMix += chState.weight * sample;
 
-                        DBL(DB_AUDIO_SAMPLES,
-                            "sample(" << p << "/" << chState.index << "/"
-                                      << chIdx << "): " << sample);
+                        DBL(DB_AUDIO_SAMPLES, "sample(" << p << "/" << chState.index << "/" << chIdx << "): " << sample);
                     }
 
                     float rMix = 0.0f;
-                    const std::vector<ChannelState>& rightChs =
-                        cmixState.rights;
+                    const std::vector<ChannelState>& rightChs = cmixState.rights;
 
                     for (int n = 0; n < rightChs.size(); ++n)
                     {
                         const ChannelState& chState = rightChs[n];
                         int p = (planar) ? chState.index : 0;
                         int chIdx = (chState.index - p) + (s * chansPerPlane);
-                        const float sample =
-                            float(framePointers[p][chIdx] - (T)offset)
-                            * typeFactor;
+                        const float sample = float(framePointers[p][chIdx] - (T)offset) * typeFactor;
                         rMix += chState.weight * sample;
 
-                        DBL(DB_AUDIO_SAMPLES,
-                            "sample(" << p << "/" << chState.index << "/"
-                                      << chIdx << "): " << sample);
+                        DBL(DB_AUDIO_SAMPLES, "sample(" << p << "/" << chState.index << "/" << chIdx << "): " << sample);
                     }
 
                     (*outBuffer++) = lMix + rMix;
@@ -4625,8 +4376,7 @@ namespace TwkMovie
         }
         track->lastDecodedAudio = goalStart - 1;
 
-        DBL(DB_AUDIO, "floatsCollected: " << desired << " lastDecodedAudio: "
-                                          << track->lastDecodedAudio);
+        DBL(DB_AUDIO, "floatsCollected: " << desired << " lastDecodedAudio: " << track->lastDecodedAudio);
 
         return desired;
     }
@@ -4657,16 +4407,13 @@ namespace TwkMovie
 
     MovieFFMpegWriter::~MovieFFMpegWriter() {}
 
-    void MovieFFMpegWriter::addTrack(
-        bool isVideo, string codec,
-        bool removeAppliedCodecParametersFromTheList /*=true*/)
+    void MovieFFMpegWriter::addTrack(bool isVideo, string codec, bool removeAppliedCodecParametersFromTheList /*=true*/)
     {
         const AVCodec* avCodec = avcodec_find_encoder_by_name(codec.c_str());
 
         if (!avCodec)
         {
-            TWK_THROW_EXC_STREAM("Unsupported or unable to find codec named: '"
-                                 << codec << "'");
+            TWK_THROW_EXC_STREAM("Unsupported or unable to find codec named: '" << codec << "'");
         }
 
         AVStream* avStream = avformat_new_stream(m_avFormatContext, avCodec);
@@ -4686,8 +4433,7 @@ namespace TwkMovie
             avCodecContext->time_base.den = m_timeScale;
             avCodecContext->codec_id = avCodec->id;
             avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
-            avCodecContext->thread_count =
-                m_request.threads; // 0; and never seems to changed anywhere?
+            avCodecContext->thread_count = m_request.threads; // 0; and never seems to changed anywhere?
             avCodecContext->width = m_info.width;
             avCodecContext->height = m_info.height;
             avCodecContext->color_primaries = AVCOL_PRI_BT709; // 1
@@ -4705,8 +4451,7 @@ namespace TwkMovie
 
             if (m_parameters.find("pix_fmt") != m_parameters.end())
             {
-                avCodecContext->pix_fmt =
-                    av_get_pix_fmt(m_parameters["pix_fmt"].c_str());
+                avCodecContext->pix_fmt = av_get_pix_fmt(m_parameters["pix_fmt"].c_str());
                 if (removeAppliedCodecParametersFromTheList)
                 {
                     m_parameters.erase("pix_fmt");
@@ -4714,16 +4459,28 @@ namespace TwkMovie
             }
             else
             {
-                avCodecContext->pix_fmt = (avCodec->pix_fmts)
-                                              ? avCodec->pix_fmts[0]
-                                              : RV_OUTPUT_FFMPEG_FMT;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
+                // New API (FFmpeg 7.0+)
+                const enum AVPixelFormat* pix_fmts = NULL;
+                int ret =
+                    avcodec_get_supported_config(avCodecContext, avCodec, AV_CODEC_CONFIG_PIX_FORMAT, 0, (const void**)&pix_fmts, NULL);
+                if (ret >= 0 && pix_fmts)
+                {
+                    avCodecContext->pix_fmt = pix_fmts[0];
+                }
+                else
+                {
+                    avCodecContext->pix_fmt = AV_PIX_FMT_NONE;
+                }
+#else
+                // Old API (FFmpeg < 7.0)
+                avCodecContext->pix_fmt = (avCodec->pix_fmts) ? avCodec->pix_fmts[0] : RV_OUTPUT_FFMPEG_FMT;
+#endif
 
                 if (m_request.verbose)
                 {
                     ostringstream message;
-                    message
-                        << "No pix_fmt specified. Using: "
-                        << string(av_get_pix_fmt_name(avCodecContext->pix_fmt));
+                    message << "No pix_fmt specified. Using: " << string(av_get_pix_fmt_name(avCodecContext->pix_fmt));
                     report(message.str());
                 }
             }
@@ -4733,15 +4490,13 @@ namespace TwkMovie
             //  matrix except jpeg, or RGB pixel formats
             //
 
-            if (codec == "jpegls" || codec == "ljpeg" || codec == "mjpeg"
-                || codec == "mjpegb" || codec == "v210")
+            if (codec == "jpegls" || codec == "ljpeg" || codec == "mjpeg" || codec == "mjpegb" || codec == "v210")
             {
                 avCodecContext->colorspace = AVCOL_SPC_SMPTE170M; // 6
             }
             else
             {
-                const AVPixFmtDescriptor* desc =
-                    av_pix_fmt_desc_get(avCodecContext->pix_fmt);
+                const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(avCodecContext->pix_fmt);
                 bool isRGB = (desc && (desc->flags & AV_PIX_FMT_FLAG_RGB));
 
                 if (isRGB)
@@ -4750,12 +4505,9 @@ namespace TwkMovie
                     avCodecContext->colorspace = AVCOL_SPC_BT709; // 1
             }
 
-            avCodecContext->sample_aspect_ratio =
-                av_d2q(m_request.pixelAspect, INT_MAX);
+            avCodecContext->sample_aspect_ratio = av_d2q(m_request.pixelAspect, INT_MAX);
 
-            AVPixelFormat requestFormat =
-                (m_canControlRequest) ? getBestAVFormat(avCodecContext->pix_fmt)
-                                      : RV_OUTPUT_FFMPEG_FMT;
+            AVPixelFormat requestFormat = (m_canControlRequest) ? getBestAVFormat(avCodecContext->pix_fmt) : RV_OUTPUT_FFMPEG_FMT;
             const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(requestFormat);
             int bitSize = desc->comp[0].depth - desc->comp[0].shift;
             bool hasAlpha = (desc->flags & AV_PIX_FMT_FLAG_ALPHA);
@@ -4766,15 +4518,13 @@ namespace TwkMovie
             m_info.pixelAspect = m_request.pixelAspect;
             m_info.orientation = FrameBuffer::TOPLEFT;
             m_info.numChannels = (hasAlpha) ? 4 : 3;
-            m_info.dataType =
-                (bitSize > 8) ? FrameBuffer::USHORT : FrameBuffer::UCHAR;
+            m_info.dataType = (bitSize > 8) ? FrameBuffer::USHORT : FrameBuffer::UCHAR;
 
             // Backwards compatibility for quality setting
             if (codec == "mjpeg")
             {
                 avCodecContext->flags |= AV_CODEC_FLAG_QSCALE;
-                avCodecContext->global_quality =
-                    pow(100000, 1.0 - m_request.quality);
+                avCodecContext->global_quality = pow(100000, 1.0 - m_request.quality);
             }
 
             VideoTrack* track = new VideoTrack;
@@ -4785,8 +4535,7 @@ namespace TwkMovie
             // Set the reel name if provided
             if (m_reelName != "")
             {
-                av_dict_set(&avStream->metadata, "reel_name",
-                            m_reelName.c_str(), 0);
+                av_dict_set(&avStream->metadata, "reel_name", m_reelName.c_str(), 0);
             }
         }
         else
@@ -4799,13 +4548,11 @@ namespace TwkMovie
             avCodecContext->codec_type = AVMEDIA_TYPE_AUDIO;
             avCodecContext->sample_rate = m_info.audioSampleRate;
             avCodecContext->ch_layout.nb_channels = m_info.audioChannels.size();
-            av_channel_layout_default(&(avCodecContext->ch_layout),
-                                      avCodecContext->ch_layout.nb_channels);
+            av_channel_layout_default(&(avCodecContext->ch_layout), avCodecContext->ch_layout.nb_channels);
 
             if (m_parameters.find("sample_fmt") != m_parameters.end())
             {
-                avCodecContext->sample_fmt =
-                    av_get_sample_fmt(m_parameters["sample_fmt"].c_str());
+                avCodecContext->sample_fmt = av_get_sample_fmt(m_parameters["sample_fmt"].c_str());
                 if (removeAppliedCodecParametersFromTheList)
                 {
                     m_parameters.erase("sample_fmt");
@@ -4813,7 +4560,21 @@ namespace TwkMovie
             }
             else
             {
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
+                const enum AVSampleFormat* sample_fmts = NULL;
+                int ret =
+                    avcodec_get_supported_config(avCodecContext, NULL, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, (const void**)&sample_fmts, NULL);
+                if (ret >= 0 && sample_fmts)
+                {
+                    avCodecContext->sample_fmt = sample_fmts[0];
+                }
+                else
+                {
+                    avCodecContext->sample_fmt = AV_SAMPLE_FMT_NONE;
+                }
+#else
                 avCodecContext->sample_fmt = avCodec->sample_fmts[0];
+#endif
             }
 
             AudioTrack* track = new AudioTrack;
@@ -4839,8 +4600,7 @@ namespace TwkMovie
         }
 
         // Set any relevant codec options
-        applyCodecParameters(avCodecContext,
-                             removeAppliedCodecParametersFromTheList);
+        applyCodecParameters(avCodecContext, removeAppliedCodecParametersFromTheList);
 
         int ret = avcodec_open2(avCodecContext, avCodec, NULL);
         if (ret < 0)
@@ -4849,11 +4609,9 @@ namespace TwkMovie
         }
 
         // Copy codec parameters from AVCodecContext to AVStream.
-        if (avcodec_parameters_from_context(avStream->codecpar, avCodecContext)
-            < 0)
+        if (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) < 0)
         {
-            TWK_THROW_EXC_STREAM(
-                "Failed to copy codec parameters from context to stream");
+            TWK_THROW_EXC_STREAM("Failed to copy codec parameters from context to stream");
         }
 
         // Post codec open initializations
@@ -4862,20 +4620,15 @@ namespace TwkMovie
         else
         {
             // If there is no preferred sample size in this codec then use 2048
-            m_audioFrameSize = (avCodecContext->frame_size)
-                                   ? avCodecContext->frame_size
-                                   : 2048;
+            m_audioFrameSize = (avCodecContext->frame_size) ? avCodecContext->frame_size : 2048;
             if (m_audioSamples)
                 av_freep(&m_audioSamples);
-            m_audioSamples = av_malloc(
-                avCodecContext->ch_layout.nb_channels * m_audioFrameSize
-                * av_get_bytes_per_sample(avCodecContext->sample_fmt));
+            m_audioSamples =
+                av_malloc(avCodecContext->ch_layout.nb_channels * m_audioFrameSize * av_get_bytes_per_sample(avCodecContext->sample_fmt));
         }
     }
 
-    void MovieFFMpegWriter::applyCodecParameters(
-        AVCodecContext* avCodecContext,
-        bool removeAppliedCodecParametersFromTheList /*=true*/)
+    void MovieFFMpegWriter::applyCodecParameters(AVCodecContext* avCodecContext, bool removeAppliedCodecParametersFromTheList /*=true*/)
     {
         //
         // Find and apply parameters for AVCodecContext (*cc:) and AVCodec
@@ -4884,8 +4637,7 @@ namespace TwkMovie
         //
 
         vector<string> applied;
-        for (map<string, string>::iterator left = m_parameters.begin();
-             left != m_parameters.end(); left++)
+        for (map<string, string>::iterator left = m_parameters.begin(); left != m_parameters.end(); left++)
         {
             string name = left->first;
             string value = left->second;
@@ -4906,8 +4658,7 @@ namespace TwkMovie
             }
             if (opt != NULL && avObj != NULL)
             {
-                DBL(DB_WRITE, "Found option: " << opt->name << " for name: "
-                                               << name << " value: " << value);
+                DBL(DB_WRITE, "Found option: " << opt->name << " for name: " << name << " value: " << value);
 
                 if (setOption(opt, avObj, value))
                     applied.push_back(left->first);
@@ -4920,8 +4671,7 @@ namespace TwkMovie
         //
         if (removeAppliedCodecParametersFromTheList)
         {
-            for (vector<string>::iterator erase = applied.begin();
-                 erase != applied.end(); erase++)
+            for (vector<string>::iterator erase = applied.begin(); erase != applied.end(); erase++)
             {
                 m_parameters.erase(*erase);
             }
@@ -4949,9 +4699,7 @@ namespace TwkMovie
             // Handle tweak specific parameter options
             //
 
-            if (name.substr(0, 7) == "output/"
-                || name.substr(0, 8) == "duration"
-                || name.substr(0, 9) == "timescale"
+            if (name.substr(0, 7) == "output/" || name.substr(0, 8) == "duration" || name.substr(0, 9) == "timescale"
                 || name.substr(0, 17) == "libx264autoresize")
                 continue;
 
@@ -4968,18 +4716,15 @@ namespace TwkMovie
                     int frame = atoi(value.c_str());
                     AVTimecode avTimecode;
                     AVRational rate = av_d2q(m_info.fps, INT_MAX);
-                    av_timecode_init(&avTimecode, rate, 0, 0,
-                                     m_avFormatContext);
+                    av_timecode_init(&avTimecode, rate, 0, 0, m_avFormatContext);
                     char tcString[80];
                     av_timecode_make_string(&avTimecode, tcString, frame);
                     tcval = string(tcString);
                 }
-                int ret = av_dict_set(&m_avFormatContext->metadata, "timecode",
-                                      tcval.c_str(), 0);
+                int ret = av_dict_set(&m_avFormatContext->metadata, "timecode", tcval.c_str(), 0);
                 if (ret < 0)
                 {
-                    TWK_THROW_EXC_STREAM("Unable to set timecode from: '"
-                                         << value << "'");
+                    TWK_THROW_EXC_STREAM("Unable to set timecode from: '" << value << "'");
                 }
                 continue;
             }
@@ -5001,12 +4746,10 @@ namespace TwkMovie
 
             if (isMetadataField(name))
             {
-                int ret = av_dict_set(&m_avFormatContext->metadata,
-                                      name.c_str(), value.c_str(), 0);
+                int ret = av_dict_set(&m_avFormatContext->metadata, name.c_str(), value.c_str(), 0);
                 if (ret < 0)
                 {
-                    TWK_THROW_EXC_STREAM("Unable to set " << name << " from: '"
-                                                          << value << "'");
+                    TWK_THROW_EXC_STREAM("Unable to set " << name << " from: '" << value << "'");
                 }
                 if (name == "comment")
                     comment = true;
@@ -5045,28 +4788,23 @@ namespace TwkMovie
 
         if (!comment)
         {
-            int ret = av_dict_set(&m_avFormatContext->metadata, "comment",
-                                  m_request.comments.c_str(), 0);
+            int ret = av_dict_set(&m_avFormatContext->metadata, "comment", m_request.comments.c_str(), 0);
             if (ret < 0)
             {
-                TWK_THROW_EXC_STREAM("Unable to set comment from: '"
-                                     << m_request.comments << "'");
+                TWK_THROW_EXC_STREAM("Unable to set comment from: '" << m_request.comments << "'");
             }
         }
         if (!copyright)
         {
-            int ret = av_dict_set(&m_avFormatContext->metadata, "copyright",
-                                  m_request.copyright.c_str(), 0);
+            int ret = av_dict_set(&m_avFormatContext->metadata, "copyright", m_request.copyright.c_str(), 0);
             if (ret < 0)
             {
-                TWK_THROW_EXC_STREAM("Unable to set copyright from: '"
-                                     << m_request.copyright << "'");
+                TWK_THROW_EXC_STREAM("Unable to set copyright from: '" << m_request.copyright << "'");
             }
         }
     }
 
-    void MovieFFMpegWriter::collectWriteInfo(string videoCodec,
-                                             string audioCodec)
+    void MovieFFMpegWriter::collectWriteInfo(string videoCodec, string audioCodec)
     {
         //
         //  Create a list of all the frames to output from the input
@@ -5133,8 +4871,7 @@ namespace TwkMovie
             {
                 if (movflagsIdx == -1)
                 {
-                    m_request.parameters.push_back(
-                        StringPair("of:movflags", "write_colr"));
+                    m_request.parameters.push_back(StringPair("of:movflags", "write_colr"));
                 }
                 else
                     m_request.parameters[movflagsIdx].second += "|write_colr";
@@ -5213,44 +4950,31 @@ namespace TwkMovie
         }
         if (m_info.audio)
         {
-            unsigned int audioChannels = m_request.audioChannels
-                                             ? m_request.audioChannels
-                                             : m_info.audioChannels.size();
-            Time audioSampleRate = m_request.audioRate ? m_request.audioRate
-                                                       : m_info.audioSampleRate;
+            unsigned int audioChannels = m_request.audioChannels ? m_request.audioChannels : m_info.audioChannels.size();
+            Time audioSampleRate = m_request.audioRate ? m_request.audioRate : m_info.audioSampleRate;
 
-            m_info.audioChannels =
-                layoutChannels(channelLayouts(audioChannels).front());
+            m_info.audioChannels = layoutChannels(channelLayouts(audioChannels).front());
             m_info.audioSampleRate = audioSampleRate;
 
             if (audioCodec == "aac")
             {
-                m_lastAudioTime =
-                    -samplesToTime(size_t(1024), m_info.audioSampleRate);
+                m_lastAudioTime = -samplesToTime(size_t(1024), m_info.audioSampleRate);
             }
         }
 
-        DBL(DB_WRITE,
-            "video: " << m_info.video << " start: " << m_info.start
-                      << " end: " << m_info.end << " inc: " << m_info.inc
-                      << " fps: " << m_info.fps << " audio: " << m_info.audio
-                      << " audioChannels: " << m_info.audioChannels.size()
-                      << " audioSampleRate: " << m_info.audioSampleRate
-                      << " timeScale: " << m_timeScale << " duration: "
-                      << m_duration << " frames: " << m_frames.size());
+        DBL(DB_WRITE, "video: " << m_info.video << " start: " << m_info.start << " end: " << m_info.end << " inc: " << m_info.inc
+                                << " fps: " << m_info.fps << " audio: " << m_info.audio << " audioChannels: " << m_info.audioChannels.size()
+                                << " audioSampleRate: " << m_info.audioSampleRate << " timeScale: " << m_timeScale
+                                << " duration: " << m_duration << " frames: " << m_frames.size());
     }
 
-    void MovieFFMpegWriter::encodeAudio(AVCodecContext* audioCodecContext,
-                                        AVFrame* frame, AVPacket* pkt,
-                                        AVStream* audioStream,
-                                        SampleTime* nsamps,
-                                        int64_t lastEncAudio)
+    void MovieFFMpegWriter::encodeAudio(AVCodecContext* audioCodecContext, AVFrame* frame, AVPacket* pkt, AVStream* audioStream,
+                                        SampleTime* nsamps, int64_t lastEncAudio)
     {
         int ret = avcodec_send_frame(audioCodecContext, frame);
         if (ret < 0)
         {
-            TWK_THROW_EXC_STREAM(
-                "Error encoding audio frame: " << avErr2Str(ret));
+            TWK_THROW_EXC_STREAM("Error encoding audio frame: " << avErr2Str(ret));
         }
 
         while (ret >= 0)
@@ -5263,34 +4987,29 @@ namespace TwkMovie
 
             if (ret < 0)
             {
-                TWK_THROW_EXC_STREAM(
-                    "Error encoding audio frame: " << avErr2Str(ret));
+                TWK_THROW_EXC_STREAM("Error encoding audio frame: " << avErr2Str(ret));
             }
             if (!ret && pkt->size)
             {
                 pkt->stream_index = audioStream->index;
-                validateTimestamps(pkt, audioStream, audioCodecContext, 0,
-                                   true);
+                validateTimestamps(pkt, audioStream, audioCodecContext, 0, true);
                 ret = av_interleaved_write_frame(m_avFormatContext, pkt);
                 if (ret < 0)
                 {
-                    TWK_THROW_EXC_STREAM(
-                        "Error while writing audio frame: " << avErr2Str(ret));
+                    TWK_THROW_EXC_STREAM("Error while writing audio frame: " << avErr2Str(ret));
                 }
 
                 // Update the last time sample in seconds we encoded
                 if (nsamps)
                 {
-                    m_lastAudioTime +=
-                        samplesToTime(*nsamps, m_info.audioSampleRate);
+                    m_lastAudioTime += samplesToTime(*nsamps, m_info.audioSampleRate);
                 }
             }
             frame->pts = lastEncAudio;
         }
     }
 
-    bool MovieFFMpegWriter::fillAudio(Movie* inMovie, double overflow,
-                                      bool lastPass)
+    bool MovieFFMpegWriter::fillAudio(Movie* inMovie, double overflow, bool lastPass)
     {
         //
         //  Compute the start and end samples for this audio
@@ -5310,11 +5029,8 @@ namespace TwkMovie
             return audioFinished;
 
         Time audioLength = samplesToTime(nsamps, m_info.audioSampleRate);
-        Movie::AudioReadRequest audioRequest(m_lastAudioTime + audioOffset,
-                                             audioLength);
-        TwkAudio::AudioBuffer audioBuffer(nsamps, m_info.audioChannels,
-                                          m_info.audioSampleRate,
-                                          m_lastAudioTime + audioOffset);
+        Movie::AudioReadRequest audioRequest(m_lastAudioTime + audioOffset, audioLength);
+        TwkAudio::AudioBuffer audioBuffer(nsamps, m_info.audioChannels, m_info.audioSampleRate, m_lastAudioTime + audioOffset);
         inMovie->audioFillBuffer(audioRequest, audioBuffer);
 
         if (m_request.verbose)
@@ -5334,46 +5050,33 @@ namespace TwkMovie
         bool planar = av_sample_fmt_is_planar(audioFormat);
 
         DBL(DB_WRITE,
-            "nsamps: " << nsamps << " planar: " << planar
-                       << " bufSize: " << audioBuffer.size()
-                       << " audioChannels: " << audioChannels
-                       << " bufChannels: " << audioBuffer.numChannels()
-                       << " audioSampleRate: " << m_info.audioSampleRate
-                       << " bufRate: " << audioBuffer.rate()
-                       << " audioLength: " << audioLength
-                       << " bufLength: " << audioBuffer.duration()
-                       << " bufTotalSize: " << audioBuffer.sizeInBytes()
-                       << " totalOutputSize: " << totalOutputSize
-                       << " m_lastAudioTime: " << m_lastAudioTime
-                       << " bufStart: " << audioBuffer.startTime()
-                       << " overflow: " << overflow);
+            "nsamps: " << nsamps << " planar: " << planar << " bufSize: " << audioBuffer.size() << " audioChannels: " << audioChannels
+                       << " bufChannels: " << audioBuffer.numChannels() << " audioSampleRate: " << m_info.audioSampleRate
+                       << " bufRate: " << audioBuffer.rate() << " audioLength: " << audioLength << " bufLength: " << audioBuffer.duration()
+                       << " bufTotalSize: " << audioBuffer.sizeInBytes() << " totalOutputSize: " << totalOutputSize
+                       << " m_lastAudioTime: " << m_lastAudioTime << " bufStart: " << audioBuffer.startTime() << " overflow: " << overflow);
 
         switch (audioFormat)
         {
         case AV_SAMPLE_FMT_U8:
         case AV_SAMPLE_FMT_U8P:
-            translateRVAudio<unsigned char>(audioChannels, &audioBuffer,
-                                            CHAR_MAX, 127, planar);
+            translateRVAudio<unsigned char>(audioChannels, &audioBuffer, CHAR_MAX, 127, planar);
             break;
         case AV_SAMPLE_FMT_S16:
         case AV_SAMPLE_FMT_S16P:
-            translateRVAudio<short>(audioChannels, &audioBuffer, SHRT_MAX, 0,
-                                    planar);
+            translateRVAudio<short>(audioChannels, &audioBuffer, SHRT_MAX, 0, planar);
             break;
         case AV_SAMPLE_FMT_S32:
         case AV_SAMPLE_FMT_S32P:
-            translateRVAudio<int>(audioChannels, &audioBuffer, INT_MAX, 0,
-                                  planar);
+            translateRVAudio<int>(audioChannels, &audioBuffer, INT_MAX, 0, planar);
             break;
         case AV_SAMPLE_FMT_FLT:
         case AV_SAMPLE_FMT_FLTP:
-            translateRVAudio<float>(audioChannels, &audioBuffer, 1.0, 0,
-                                    planar);
+            translateRVAudio<float>(audioChannels, &audioBuffer, 1.0, 0, planar);
             break;
         case AV_SAMPLE_FMT_DBL:
         case AV_SAMPLE_FMT_DBLP:
-            translateRVAudio<double>(audioChannels, &audioBuffer, 1.0, 0,
-                                     planar);
+            translateRVAudio<double>(audioChannels, &audioBuffer, 1.0, 0, planar);
             break;
         case AV_SAMPLE_FMT_NONE:
         default:
@@ -5387,11 +5090,9 @@ namespace TwkMovie
 
         track->audioFrame->nb_samples = nsamps;
         track->audioFrame->format = audioFormat;
-        track->audioFrame->ch_layout.nb_channels =
-            audioCodecContext->ch_layout.nb_channels;
+        track->audioFrame->ch_layout.nb_channels = audioCodecContext->ch_layout.nb_channels;
         track->audioFrame->ch_layout = audioCodecContext->ch_layout;
-        avcodec_fill_audio_frame(track->audioFrame, audioChannels, audioFormat,
-                                 (uint8_t*)m_audioSamples, totalOutputSize, 0);
+        avcodec_fill_audio_frame(track->audioFrame, audioChannels, audioFormat, (uint8_t*)m_audioSamples, totalOutputSize, 0);
 
         //
         // Make sure the frame has a valid pts to seed the packet.
@@ -5401,33 +5102,27 @@ namespace TwkMovie
         {
             track->audioFrame->pts = track->lastEncodedAudio;
         }
-        track->lastEncodedAudio =
-            track->audioFrame->pts + track->audioFrame->nb_samples;
+        track->lastEncodedAudio = track->audioFrame->pts + track->audioFrame->nb_samples;
 
-        encodeAudio(audioCodecContext, track->audioFrame, track->audioPacket,
-                    audioStream, &nsamps, track->lastDecodedAudio);
+        encodeAudio(audioCodecContext, track->audioFrame, track->audioPacket, audioStream, &nsamps, track->lastDecodedAudio);
         if (lastPass)
         {
             // It is important to call encodeAudio (above) to make sure that all
             // frames as been sent to the encoder before entering draining mode
             // by passing NULL. Send a NULL frame to enter draining mode.
-            encodeAudio(audioCodecContext, NULL, track->audioPacket,
-                        audioStream, NULL, track->lastDecodedAudio);
+            encodeAudio(audioCodecContext, NULL, track->audioPacket, audioStream, NULL, track->lastDecodedAudio);
             // Returned value as no value at this point.
         }
 
         return audioFinished;
     }
 
-    void MovieFFMpegWriter::encodeVideo(AVCodecContext* ctx, AVFrame* frame,
-                                        AVPacket* pkt, AVStream* stream,
-                                        int lastEncVideo)
+    void MovieFFMpegWriter::encodeVideo(AVCodecContext* ctx, AVFrame* frame, AVPacket* pkt, AVStream* stream, int lastEncVideo)
     {
         int ret = avcodec_send_frame(ctx, frame);
         if (ret < 0)
         {
-            TWK_THROW_EXC_STREAM(
-                "Error encoding video frame: " << avErr2Str(ret));
+            TWK_THROW_EXC_STREAM("Error encoding video frame: " << avErr2Str(ret));
         }
 
         while (ret >= 0)
@@ -5443,34 +5138,29 @@ namespace TwkMovie
             ret = av_interleaved_write_frame(m_avFormatContext, pkt);
             if (ret != 0)
             {
-                TWK_THROW_EXC_STREAM(
-                    "Error while writing video frame: " << avErr2Str(ret));
+                TWK_THROW_EXC_STREAM("Error while writing video frame: " << avErr2Str(ret));
             }
         }
     }
 
-    void MovieFFMpegWriter::fillVideo(FrameBufferVector fbs, int trackIndex,
-                                      int frameIndex, bool lastPass)
+    void MovieFFMpegWriter::fillVideo(FrameBufferVector fbs, int trackIndex, int frameIndex, bool lastPass)
     {
         VideoTrack* track = m_videoTracks[trackIndex];
         AVStream* avStream = m_avFormatContext->streams[track->number];
         AVCodecContext* videoCodecContext = track->avCodecContext;
 
-        int fbIndex =
-            (trackIndex > fbs.size() - 1) ? fbs.size() - 1 : trackIndex;
+        int fbIndex = (trackIndex > fbs.size() - 1) ? fbs.size() - 1 : trackIndex;
         FrameBuffer* fb = fbs[fbIndex];
 
         //
         // Re-orient the framebuffer to TOPLEFT
         //
 
-        if (fb->orientation() == FrameBuffer::NATURAL
-            || fb->orientation() == FrameBuffer::BOTTOMRIGHT)
+        if (fb->orientation() == FrameBuffer::NATURAL || fb->orientation() == FrameBuffer::BOTTOMRIGHT)
         {
             flip(fb);
         }
-        if (fb->orientation() == FrameBuffer::TOPRIGHT
-            || fb->orientation() == FrameBuffer::BOTTOMRIGHT)
+        if (fb->orientation() == FrameBuffer::TOPRIGHT || fb->orientation() == FrameBuffer::BOTTOMRIGHT)
         {
             flop(fb);
         }
@@ -5490,8 +5180,7 @@ namespace TwkMovie
         pixels[0] = fb->pixels<uint8_t>(); // AKA unsigned char
         linesizes[0] = fb->scanlinePaddedSize();
 
-        sws_scale(track->imgConvertContext, pixels, linesizes, 0,
-                  videoCodecContext->height, track->outPicture->data,
+        sws_scale(track->imgConvertContext, pixels, linesizes, 0, videoCodecContext->height, track->outPicture->data,
                   track->outPicture->linesize);
 
         // Send/Receive encoding and decoding API overview
@@ -5501,22 +5190,17 @@ namespace TwkMovie
         track->lastEncodedVideo = track->videoFrame->pts;
         track->videoFrame->pts = frameIndex;
 
-        encodeVideo(videoCodecContext, track->videoFrame, track->videoPacket,
-                    avStream, track->lastEncodedVideo);
+        encodeVideo(videoCodecContext, track->videoFrame, track->videoPacket, avStream, track->lastEncodedVideo);
         if (lastPass)
         {
             // It is important to call encodeVideo (above) to make sure that all
             // frames as been sent to the encoder before entering draining mode
             // by passing NULL. Send a NULL frame to enter draining mode.
-            encodeVideo(videoCodecContext, NULL, track->videoPacket, avStream,
-                        track->lastEncodedVideo);
+            encodeVideo(videoCodecContext, NULL, track->videoPacket, avStream, track->lastEncodedVideo);
         }
 
-        DBL(DB_WRITE,
-            "requested chans: " << m_info.numChannels
-                                << " dataType: " << m_info.dataType
-                                << " returned chans: " << fb->numChannels()
-                                << " dataType: " << fb->dataType());
+        DBL(DB_WRITE, "requested chans: " << m_info.numChannels << " dataType: " << m_info.dataType
+                                          << " returned chans: " << fb->numChannels() << " dataType: " << fb->dataType());
     }
 
     void MovieFFMpegWriter::initRefMovie(ReformattingMovie* refMovie)
@@ -5536,8 +5220,7 @@ namespace TwkMovie
         }
         if (m_info.audio)
         {
-            refMovie->setAudio(m_info.audioSampleRate, m_audioFrameSize,
-                               m_info.audioChannels);
+            refMovie->setAudio(m_info.audioSampleRate, m_audioFrameSize, m_info.audioChannels);
         }
     }
 
@@ -5547,15 +5230,12 @@ namespace TwkMovie
 
         VideoTrack* track = m_videoTracks[avStream->id];
         AVCodecContext* videoCodecContext = track->avCodecContext;
-        AVPixelFormat srcFmt = (m_canControlRequest)
-                                   ? getBestAVFormat(videoCodecContext->pix_fmt)
-                                   : RV_OUTPUT_FFMPEG_FMT;
+        AVPixelFormat srcFmt = (m_canControlRequest) ? getBestAVFormat(videoCodecContext->pix_fmt) : RV_OUTPUT_FFMPEG_FMT;
         AVPixelFormat dstFmt = videoCodecContext->pix_fmt;
 
-        track->imgConvertContext = sws_getCachedContext(
-            NULL, videoCodecContext->width, videoCodecContext->height, srcFmt,
-            videoCodecContext->width, videoCodecContext->height, dstFmt,
-            SWS_BICUBIC, NULL, NULL, NULL);
+        track->imgConvertContext =
+            sws_getCachedContext(NULL, videoCodecContext->width, videoCodecContext->height, srcFmt, videoCodecContext->width,
+                                 videoCodecContext->height, dstFmt, SWS_BICUBIC, NULL, NULL, NULL);
 
         if (track->imgConvertContext == 0)
         {
@@ -5574,8 +5254,7 @@ namespace TwkMovie
 
         if (ret < 0)
         {
-            TWK_THROW_EXC_STREAM(
-                "Could not allocate picture: " << avErr2Str(ret));
+            TWK_THROW_EXC_STREAM("Could not allocate picture: " << avErr2Str(ret));
         }
 
         //
@@ -5590,8 +5269,7 @@ namespace TwkMovie
 
         if (ret < 0)
         {
-            TWK_THROW_EXC_STREAM(
-                "Could not allocate temporary picture: " << avErr2Str(ret));
+            TWK_THROW_EXC_STREAM("Could not allocate temporary picture: " << avErr2Str(ret));
         }
 
         // Copy data and linesize picture pointers to frame
@@ -5609,10 +5287,8 @@ namespace TwkMovie
         //  problem.
         //
 
-        assert(sizeof(track->videoFrame->data)
-               == sizeof(track->outPicture->data));
-        assert(sizeof(track->videoFrame->linesize)
-               == sizeof(track->outPicture->linesize));
+        assert(sizeof(track->videoFrame->data) == sizeof(track->outPicture->data));
+        assert(sizeof(track->videoFrame->linesize) == sizeof(track->outPicture->linesize));
 
         for (size_t i = 0; i < AV_NUM_DATA_POINTERS; i++)
         {
@@ -5637,48 +5313,37 @@ namespace TwkMovie
         int contrast = -1;
         int saturation = -1;
 
-        int spret = sws_getColorspaceDetails(
-            track->imgConvertContext, &inv_table, &srcRange, &table, &dstRange,
-            &brightness, &contrast, &saturation);
+        int spret = sws_getColorspaceDetails(track->imgConvertContext, &inv_table, &srcRange, &table, &dstRange, &brightness, &contrast,
+                                             &saturation);
 
-        DBL(DB_WRITE, "(BEFORE) Color Details "
-                          << endl
-                          << "\ttable " << table[0] << " " << table[1] << " "
-                          << table[2] << " " << table[3] << endl
-                          << "\tinv   " << inv_table[0] << " " << inv_table[1]
-                          << " " << inv_table[2] << " " << inv_table[3] << endl
-                          << "\tsrcRange " << srcRange << " dstRange "
-                          << dstRange);
+        DBL(DB_WRITE, "(BEFORE) Color Details " << endl
+                                                << "\ttable " << table[0] << " " << table[1] << " " << table[2] << " " << table[3] << endl
+                                                << "\tinv   " << inv_table[0] << " " << inv_table[1] << " " << inv_table[2] << " "
+                                                << inv_table[3] << endl
+                                                << "\tsrcRange " << srcRange << " dstRange " << dstRange);
         //
         //  Be sure any rgb->yuv coefficients are the right onees for the output
         //  colorspace.
         //
 
-        spret = sws_setColorspaceDetails(
-            track->imgConvertContext,
-            sws_getCoefficients(videoCodecContext->colorspace), srcRange,
-            sws_getCoefficients(videoCodecContext->colorspace),
-            videoCodecContext->color_range - 1, // SwsContext uses 1 less
-            brightness, contrast, saturation);
+        spret = sws_setColorspaceDetails(track->imgConvertContext, sws_getCoefficients(videoCodecContext->colorspace), srcRange,
+                                         sws_getCoefficients(videoCodecContext->colorspace),
+                                         videoCodecContext->color_range - 1, // SwsContext uses 1 less
+                                         brightness, contrast, saturation);
 
 #if DB_WRITE & DB_LEVEL
-        spret = sws_getColorspaceDetails(
-            track->imgConvertContext, (int**)(&inv_table), &srcRange,
-            (int**)(&table), &dstRange, &brightness, &contrast, &saturation);
+        spret = sws_getColorspaceDetails(track->imgConvertContext, (int**)(&inv_table), &srcRange, (int**)(&table), &dstRange, &brightness,
+                                         &contrast, &saturation);
 #endif
 
-        DBL(DB_WRITE, "(AFTER) Color Details "
-                          << endl
-                          << "\ttable " << table[0] << " " << table[1] << " "
-                          << table[2] << " " << table[3] << endl
-                          << "\tinv   " << inv_table[0] << " " << inv_table[1]
-                          << " " << inv_table[2] << " " << inv_table[3] << endl
-                          << "\tsrcRange " << srcRange << " dstRange "
-                          << dstRange);
+        DBL(DB_WRITE, "(AFTER) Color Details " << endl
+                                               << "\ttable " << table[0] << " " << table[1] << " " << table[2] << " " << table[3] << endl
+                                               << "\tinv   " << inv_table[0] << " " << inv_table[1] << " " << inv_table[2] << " "
+                                               << inv_table[3] << endl
+                                               << "\tsrcRange " << srcRange << " dstRange " << dstRange);
     }
 
-    bool MovieFFMpegWriter::setOption(const AVOption* opt, void* avObj,
-                                      const string value)
+    bool MovieFFMpegWriter::setOption(const AVOption* opt, void* avObj, const string value)
     {
         int setopt = -1;
         istringstream invalue(value);
@@ -5706,8 +5371,7 @@ namespace TwkMovie
                     break;
                 if (av_opt_get_int(avObj, opt->name, 0, &current) != 0)
                     break;
-                setopt = av_opt_set_int(avObj, opt->name,
-                                        current | flagOpt->default_val.i64, 0);
+                setopt = av_opt_set_int(avObj, opt->name, current | flagOpt->default_val.i64, 0);
                 last = location + 1;
             } while (location != string::npos);
             break;
@@ -5743,8 +5407,7 @@ namespace TwkMovie
         if (setopt != 0)
         {
             ostringstream message;
-            message << "Unable to set '" << opt->name << "' to '" << value
-                    << "'.";
+            message << "Unable to set '" << opt->name << "' to '" << value << "'.";
             report(message.str(), true);
             return false;
         }
@@ -5753,10 +5416,7 @@ namespace TwkMovie
     }
 
     template <typename T>
-    void MovieFFMpegWriter::translateRVAudio(int outChannels,
-                                             TwkAudio::AudioBuffer* inBuffer,
-                                             double maximum, int offset,
-                                             bool planar)
+    void MovieFFMpegWriter::translateRVAudio(int outChannels, TwkAudio::AudioBuffer* inBuffer, double maximum, int offset, bool planar)
     {
         //
         // This templated method takes interleaved float audio samples from a
@@ -5780,9 +5440,7 @@ namespace TwkMovie
         vector<T*> framePointers(numPlanes);
         for (int ch = 0; ch < numPlanes; ch++)
         {
-            framePointers[ch] =
-                (planar) ? (T*)m_audioSamples + (totalNumSamples * ch)
-                         : (T*)m_audioSamples + ch;
+            framePointers[ch] = (planar) ? (T*)m_audioSamples + (totalNumSamples * ch) : (T*)m_audioSamples + ch;
         }
 
         float typeFactor = (offset != 0) ? 0.5 * maximum : maximum;
@@ -5802,8 +5460,7 @@ namespace TwkMovie
                 float merge = 0;
                 for (int b = 0; b < inChannels; b++, bufferPointer++)
                 {
-                    merge += (float)(((*bufferPointer * typeFactor) + offset)
-                                     / inChannels);
+                    merge += (float)(((*bufferPointer * typeFactor) + offset) / inChannels);
                 }
                 for (int c = 0; c < outChannels; c++)
                 {
@@ -5820,16 +5477,14 @@ namespace TwkMovie
                 for (int c = 0; c < outChannels; c++, bufferPointer++)
                 {
                     int ch = (planar) ? c : 0;
-                    *framePointers[ch]++ =
-                        (T)((*bufferPointer * typeFactor) + offset);
+                    *framePointers[ch]++ = (T)((*bufferPointer * typeFactor) + offset);
                     written++;
                 }
             }
         }
     }
 
-    void MovieFFMpegWriter::validateCodecs(string* videoCodec,
-                                           string* audioCodec)
+    void MovieFFMpegWriter::validateCodecs(string* videoCodec, string* audioCodec)
     {
         //
         // Look for a good video or audio codec starting with what the user
@@ -5842,8 +5497,7 @@ namespace TwkMovie
             vector<string> guesses;
             guesses.push_back(m_request.codec);
             guesses.push_back(RV_OUTPUT_VIDEO_CODEC);
-            guesses.push_back(string(
-                avcodec_get_name(m_avFormatContext->oformat->video_codec)));
+            guesses.push_back(string(avcodec_get_name(m_avFormatContext->oformat->video_codec)));
             *videoCodec = getWriterCodec("video", guesses);
         }
 
@@ -5852,20 +5506,16 @@ namespace TwkMovie
             vector<string> guesses;
             guesses.push_back(m_request.audioCodec);
             guesses.push_back(RV_OUTPUT_AUDIO_CODEC);
-            guesses.push_back(string(
-                avcodec_get_name(m_avFormatContext->oformat->audio_codec)));
+            guesses.push_back(string(avcodec_get_name(m_avFormatContext->oformat->audio_codec)));
             *audioCodec = getWriterCodec("audio", guesses);
         }
 
-        DBL(DB_WRITE, "video codec: '" << videoCodec << "' audio codec: "
-                                       << audioCodec << "'");
+        DBL(DB_WRITE, "video codec: '" << videoCodec << "' audio codec: " << audioCodec << "'");
     }
 
-    string MovieFFMpegWriter::getWriterCodec(std::string type,
-                                             vector<string> guesses)
+    string MovieFFMpegWriter::getWriterCodec(std::string type, vector<string> guesses)
     {
-        int avType =
-            (type == "video") ? AVMEDIA_TYPE_VIDEO : AVMEDIA_TYPE_AUDIO;
+        int avType = (type == "video") ? AVMEDIA_TYPE_VIDEO : AVMEDIA_TYPE_AUDIO;
         for (int i = 0; i < guesses.size(); i++)
         {
             string guess = guesses[i];
@@ -5881,23 +5531,19 @@ namespace TwkMovie
             }
 
             // Check if this is the right type for the track/stream
-            const AVCodec* avCodec =
-                avcodec_find_encoder_by_name(guess.c_str());
+            const AVCodec* avCodec = avcodec_find_encoder_by_name(guess.c_str());
             if (!avCodec || avCodec->type != avType)
             {
                 if (i == 0)
-                    TWK_THROW_EXC_STREAM("Invalid " << type
-                                                    << " codec: " << guess);
+                    TWK_THROW_EXC_STREAM("Invalid " << type << " codec: " << guess);
                 continue;
             }
 
             // Check if the output format support it
-            if (!avformat_query_codec(m_avOutputFormat, avCodec->id,
-                                      FF_COMPLIANCE_NORMAL))
+            if (!avformat_query_codec(m_avOutputFormat, avCodec->id, FF_COMPLIANCE_NORMAL))
             {
                 if (i == 0)
-                    TWK_THROW_EXC_STREAM(
-                        "Format does not support codec: " << guess);
+                    TWK_THROW_EXC_STREAM("Format does not support codec: " << guess);
                 continue;
             }
 
@@ -5906,8 +5552,7 @@ namespace TwkMovie
         TWK_THROW_EXC_STREAM("Failed to determine codec for " << type);
     }
 
-    void MovieFFMpegWriter::addChapter(int id, int startFrame, int endFrame,
-                                       string title)
+    void MovieFFMpegWriter::addChapter(int id, int startFrame, int endFrame, string title)
     {
         AVChapter* chapter;
         chapter = (AVChapter*)av_mallocz(sizeof(AVChapter));
@@ -5936,9 +5581,7 @@ namespace TwkMovie
         m_avFormatContext->chapters[m_avFormatContext->nb_chapters++] = chapter;
     }
 
-    MovieInfo MovieFFMpegWriter::open(const MovieInfo& info,
-                                      const string& filename,
-                                      const WriteRequest& request)
+    MovieInfo MovieFFMpegWriter::open(const MovieInfo& info, const string& filename, const WriteRequest& request)
     {
         //
         //  Get all the interesting info about the input and write request
@@ -5950,24 +5593,19 @@ namespace TwkMovie
         if (reallyVerbose())
             av_log_set_level(AV_LOG_DEBUG);
 
-        DBL(DB_WRITE,
-            "verbose: " << request.verbose << " filename: " << filename);
+        DBL(DB_WRITE, "verbose: " << request.verbose << " filename: " << filename);
 
         // Check if this is a supported output format
         string ext = boost::filesystem::path(m_filename).extension().string();
 
         if (ext[0] == '.')
             ext.erase(0, 1);
-        avformat_alloc_output_context2(&m_avFormatContext, NULL, NULL,
-                                       m_filename.c_str());
+        avformat_alloc_output_context2(&m_avFormatContext, NULL, NULL, m_filename.c_str());
         if (!m_avFormatContext)
         {
-            report(
-                "Could not deduce output format from file extension using MOV",
-                true);
+            report("Could not deduce output format from file extension using MOV", true);
             ext = "mov";
-            avformat_alloc_output_context2(&m_avFormatContext, NULL, "mov",
-                                           m_filename.c_str());
+            avformat_alloc_output_context2(&m_avFormatContext, NULL, "mov", m_filename.c_str());
         }
         if (!m_avFormatContext)
         {
@@ -5983,8 +5621,7 @@ namespace TwkMovie
             TWK_THROW_EXC_STREAM("Unsupported format: " << ext);
         }
         m_writeVideo = formatItr->second.second & MovieIO::MovieWrite;
-        m_writeAudio =
-            formatItr->second.second & MovieIO::MovieWriteAudio && m_info.audio;
+        m_writeAudio = formatItr->second.second & MovieIO::MovieWriteAudio && m_info.audio;
 
         string videoCodecString = "";
         string audioCodecString = "";
@@ -6001,8 +5638,7 @@ namespace TwkMovie
                 // sure NOT to erase the applied codec parameters when adding
                 // that first track otherwise the same parameters won't be
                 // applied to the second one.
-                addTrack(true /*isVideo*/, videoCodecString,
-                         false /*removeAppliedCodecParametersFromTheList*/);
+                addTrack(true /*isVideo*/, videoCodecString, false /*removeAppliedCodecParametersFromTheList*/);
                 addTrack(true /*isVideo*/, videoCodecString);
             }
             else
@@ -6017,9 +5653,7 @@ namespace TwkMovie
         if (m_info.chapters.size() > 0)
         {
             AVChapter** chapters;
-            chapters = (AVChapter**)av_realloc_f(
-                m_avFormatContext->chapters, m_info.chapters.size(),
-                sizeof(*m_avFormatContext->chapters));
+            chapters = (AVChapter**)av_realloc_f(m_avFormatContext->chapters, m_info.chapters.size(), sizeof(*m_avFormatContext->chapters));
             if (!chapters)
                 report("Unable to add chapters", true);
             m_avFormatContext->chapters = chapters;
@@ -6032,12 +5666,8 @@ namespace TwkMovie
                     continue;
 
                 // Make sure that the start and end are in range
-                int start = (ch.startFrame < m_info.start)
-                                ? 0
-                                : ch.startFrame - m_info.start;
-                int end = (ch.endFrame > m_info.end)
-                              ? m_info.end - m_info.start
-                              : ch.endFrame - m_info.start;
+                int start = (ch.startFrame < m_info.start) ? 0 : ch.startFrame - m_info.start;
+                int end = (ch.endFrame > m_info.end) ? m_info.end - m_info.start : ch.endFrame - m_info.start;
 
                 // End times are frame exclusive until the last chapter
                 if (end + m_info.start < m_info.end)
@@ -6047,8 +5677,7 @@ namespace TwkMovie
         }
 
         // Print warning if any parameters went unmatched
-        for (map<string, string>::iterator missed = m_parameters.begin();
-             missed != m_parameters.end(); missed++)
+        for (map<string, string>::iterator missed = m_parameters.begin(); missed != m_parameters.end(); missed++)
         {
             ostringstream message;
             message << "Could not match option: '" << missed->first << "'";
@@ -6058,12 +5687,10 @@ namespace TwkMovie
         // Open the output file, if needed
         if (!(m_avFormatContext->oformat->flags & AVFMT_NOFILE))
         {
-            int ret = avio_open(&m_avFormatContext->pb, m_filename.c_str(),
-                                AVIO_FLAG_WRITE);
+            int ret = avio_open(&m_avFormatContext->pb, m_filename.c_str(), AVIO_FLAG_WRITE);
             if (ret < 0)
             {
-                TWK_THROW_EXC_STREAM("Could not open '" << m_filename << "'. "
-                                                        << avErr2Str(ret));
+                TWK_THROW_EXC_STREAM("Could not open '" << m_filename << "'. " << avErr2Str(ret));
             }
         }
         return m_info;
@@ -6074,8 +5701,7 @@ namespace TwkMovie
         int ret = avformat_write_header(m_avFormatContext, NULL);
         if (ret < 0)
         {
-            TWK_THROW_EXC_STREAM(
-                "Error occurred when opening output file: " << avErr2Str(ret));
+            TWK_THROW_EXC_STREAM("Error occurred when opening output file: " << avErr2Str(ret));
         }
 
         //
@@ -6084,8 +5710,7 @@ namespace TwkMovie
 
         if (m_info.audio)
         {
-            Movie::AudioConfiguration conf(m_info.audioSampleRate, Stereo_2,
-                                           m_audioFrameSize);
+            Movie::AudioConfiguration conf(m_info.audioSampleRate, Stereo_2, m_audioFrameSize);
             inMovie->audioConfigure(conf);
         }
 
@@ -6097,8 +5722,7 @@ namespace TwkMovie
 
         bool audioFinished = false;
         double totalAudioLength = double(m_frames.size()) / m_info.fps;
-        double audioFrameLength =
-            samplesToTime(m_audioFrameSize, m_info.audioSampleRate);
+        double audioFrameLength = samplesToTime(m_audioFrameSize, m_info.audioSampleRate);
         for (int q = 0; q < m_frames.size(); q++)
         {
             const int f = m_frames[q];
@@ -6108,11 +5732,9 @@ namespace TwkMovie
             // after the last samples we wrote, then better write some more.
             //
 
-            while (m_writeAudio && !audioFinished
-                   && ((q + 1) > (m_lastAudioTime * m_info.fps)))
+            while (m_writeAudio && !audioFinished && ((q + 1) > (m_lastAudioTime * m_info.fps)))
             {
-                double overflow =
-                    totalAudioLength - (m_lastAudioTime + audioFrameLength);
+                double overflow = totalAudioLength - (m_lastAudioTime + audioFrameLength);
                 bool finalAudio = (overflow <= 0);
                 audioFinished = fillAudio(inMovie, overflow, finalAudio);
             }
@@ -6123,8 +5745,7 @@ namespace TwkMovie
 
             bool lastPass = q == (m_frames.size() - 1);
             FrameBufferVector fbs;
-            inMovie->imagesAtFrame(Movie::ReadRequest(f, m_request.stereo),
-                                   fbs);
+            inMovie->imagesAtFrame(Movie::ReadRequest(f, m_request.stereo), fbs);
             if (m_writeVideo)
                 fillVideo(fbs, 0, q, lastPass);
             if (m_writeVideo && m_request.stereo)
@@ -6135,12 +5756,9 @@ namespace TwkMovie
 
             if (m_request.verbose)
             {
-                float percent =
-                    int(float(q) / float(m_frames.size() - 1) * 10000.0)
-                    / float(100.0);
+                float percent = int(float(q) / float(m_frames.size() - 1) * 10000.0) / float(100.0);
                 ostringstream message;
-                message << "Writing frame " << f << " (" << percent
-                        << "% done)";
+                message << "Writing frame " << f << " (" << percent << "% done)";
                 report(message.str());
             }
         }
@@ -6174,8 +5792,7 @@ namespace TwkMovie
         return true;
     }
 
-    bool MovieFFMpegWriter::write(Movie* inMovie, const string& filename,
-                                  WriteRequest& request)
+    bool MovieFFMpegWriter::write(Movie* inMovie, const string& filename, WriteRequest& request)
     {
         m_canControlRequest = false;
 
@@ -6193,9 +5810,7 @@ namespace TwkMovie
     //
     //----------------------------------------------------------------------
 
-    MovieFFMpegIO::MovieFFMpegIO(CodecFilterFunction codecFilter,
-                                 bool bruteForce, int codecThreads,
-                                 string language, double defaultFPS,
+    MovieFFMpegIO::MovieFFMpegIO(CodecFilterFunction codecFilter, bool bruteForce, int codecThreads, string language, double defaultFPS,
                                  void (*registerCustomCodecs)() /*=nullptr*/)
         : MovieIO("MovieFFMpeg", "v2")
         , m_codecFilter(codecFilter)
@@ -6231,40 +5846,27 @@ namespace TwkMovie
         ParameterVector dparams;
         for (const char** p = metadataFieldsArray; *p; p++)
         {
-            eparams.push_back(
-                MovieIO::Parameter(*p, "string Metadata field", ""));
+            eparams.push_back(MovieIO::Parameter(*p, "string Metadata field", ""));
         }
-        eparams.push_back(MovieIO::Parameter(
-            "timecode",
-            "string 'hh:mm:ss:ff' non-drop and 'hh:mm:ss;ff' drop or a frame #",
-            ""));
-        eparams.push_back(MovieIO::Parameter(
-            "reelname",
-            "string tape/reel name of the timecode (requires timecode)", ""));
-        eparams.push_back(MovieIO::Parameter(
-            "timescale", "integer literal timescale value", ""));
-        eparams.push_back(MovieIO::Parameter(
-            "duration", "integer literal duration value", ""));
-        eparams.push_back(MovieIO::Parameter(
-            "pix_fmt", "string video pixel format (i.e. yuv420p)", ""));
-        eparams.push_back(MovieIO::Parameter(
-            "sample_fmt", "string audio sample format (i.e. s16)", ""));
-        eparams.push_back(
-            MovieIO::Parameter("libx264autoresize",
-                               "integer value of 1 will automatically alter "
-                               "dimensions for H.264 encoding",
-                               ""));
+        eparams.push_back(MovieIO::Parameter("timecode", "string 'hh:mm:ss:ff' non-drop and 'hh:mm:ss;ff' drop or a frame #", ""));
+        eparams.push_back(MovieIO::Parameter("reelname", "string tape/reel name of the timecode (requires timecode)", ""));
+        eparams.push_back(MovieIO::Parameter("timescale", "integer literal timescale value", ""));
+        eparams.push_back(MovieIO::Parameter("duration", "integer literal duration value", ""));
+        eparams.push_back(MovieIO::Parameter("pix_fmt", "string video pixel format (i.e. yuv420p)", ""));
+        eparams.push_back(MovieIO::Parameter("sample_fmt", "string audio sample format (i.e. s16)", ""));
+        eparams.push_back(MovieIO::Parameter("libx264autoresize",
+                                             "integer value of 1 will automatically alter "
+                                             "dimensions for H.264 encoding",
+                                             ""));
         collectParameters(avformat_get_class(), &eparams, &dparams, "", "f:");
 
         ParameterVector veparams;
         ParameterVector vdparams;
-        collectParameters(avcodec_get_class(), &veparams, &vdparams, "",
-                          "vcc:");
+        collectParameters(avcodec_get_class(), &veparams, &vdparams, "", "vcc:");
 
         ParameterVector aeparams;
         ParameterVector adparams;
-        collectParameters(avcodec_get_class(), &aeparams, &adparams, "",
-                          "acc:");
+        collectParameters(avcodec_get_class(), &aeparams, &adparams, "", "acc:");
 
         //
         // Walk through all supported formats and codecs and filter out those we
@@ -6280,8 +5882,7 @@ namespace TwkMovie
         StringPairVector video;
         StringPairVector audio;
         MFFormatMap formats = getFormats();
-        for (MFFormatMap::iterator formatsItr = formats.begin();
-             formatsItr != formats.end(); formatsItr++)
+        for (MFFormatMap::iterator formatsItr = formats.begin(); formatsItr != formats.end(); formatsItr++)
         {
             video.clear();
             audio.clear();
@@ -6293,12 +5894,10 @@ namespace TwkMovie
             //
 
             string fakefile = "test." + formatsItr->first;
-            const AVOutputFormat* avOutputFormat =
-                av_guess_format(NULL, fakefile.c_str(), NULL);
+            const AVOutputFormat* avOutputFormat = av_guess_format(NULL, fakefile.c_str(), NULL);
             if (avOutputFormat && avOutputFormat->priv_class)
             {
-                collectParameters(avOutputFormat->priv_class, &separams,
-                                  &sdparams, "", "f:");
+                collectParameters(avOutputFormat->priv_class, &separams, &sdparams, "", "f:");
             }
 
             //
@@ -6310,51 +5909,39 @@ namespace TwkMovie
             const AVCodec* codec;
             while ((codec = av_codec_iterate(&iter)))
             {
-                if (codecs.find(codec->name) == codecs.end()
-                    && codecIsAllowed(codec->name, false)
-                    && av_codec_is_encoder(codec) != 0
+                if (codecs.find(codec->name) == codecs.end() && codecIsAllowed(codec->name, false) && av_codec_is_encoder(codec) != 0
                     && supported.find(codec->name) != supported.end())
                 {
                     string prefix = "";
                     StringPair desc(codec->name, codec->long_name);
-                    if (codec->type == AVMEDIA_TYPE_VIDEO
-                        && formatsItr->second.second & MovieIO::MovieWrite)
+                    if (codec->type == AVMEDIA_TYPE_VIDEO && formatsItr->second.second & MovieIO::MovieWrite)
                     {
                         video.push_back(desc);
                         prefix = "vc:";
                     }
-                    else if (codec->type == AVMEDIA_TYPE_AUDIO
-                             && formatsItr->second.second
-                                    & MovieIO::MovieWriteAudio)
+                    else if (codec->type == AVMEDIA_TYPE_AUDIO && formatsItr->second.second & MovieIO::MovieWriteAudio)
                     {
                         audio.push_back(desc);
                         prefix = "ac:";
                     }
                     if (prefix != "" && codec->priv_class)
                     {
-                        collectParameters(codec->priv_class, &separams,
-                                          &sdparams, codec->name, prefix);
+                        collectParameters(codec->priv_class, &separams, &sdparams, codec->name, prefix);
                     }
                     codecs[codec->name] = 1;
                 }
             }
             if (formatsItr->second.second & MovieIO::MovieWrite)
             {
-                separams.insert(separams.end(), veparams.begin(),
-                                veparams.end());
-                sdparams.insert(sdparams.end(), vdparams.begin(),
-                                vdparams.end());
+                separams.insert(separams.end(), veparams.begin(), veparams.end());
+                sdparams.insert(sdparams.end(), vdparams.begin(), vdparams.end());
             }
             if (formatsItr->second.second & MovieIO::MovieWriteAudio)
             {
-                separams.insert(separams.end(), aeparams.begin(),
-                                aeparams.end());
-                sdparams.insert(sdparams.end(), adparams.begin(),
-                                adparams.end());
+                separams.insert(separams.end(), aeparams.begin(), aeparams.end());
+                sdparams.insert(sdparams.end(), adparams.begin(), adparams.end());
             }
-            addType(formatsItr->first, formatsItr->second.first,
-                    formatsItr->second.second, video, audio, separams,
-                    sdparams);
+            addType(formatsItr->first, formatsItr->second.first, formatsItr->second.second, video, audio, separams, sdparams);
         }
 
         // Note : No longer using the global context pool (since FFmpeg 6.0)
@@ -6389,21 +5976,16 @@ namespace TwkMovie
     string MovieFFMpegIO::about() const
     {
         ostringstream str;
-        str << "ffmpeg: avformat version " << LIBAVFORMAT_VERSION_MAJOR << "."
-            << LIBAVFORMAT_VERSION_MINOR << "." << LIBAVFORMAT_VERSION_MICRO
-            << ", avcodec version " << LIBAVCODEC_VERSION_MAJOR << "."
-            << LIBAVCODEC_VERSION_MINOR << "." << LIBAVCODEC_VERSION_MICRO
-            << ", avutil version " << LIBAVUTIL_VERSION_MAJOR << "."
-            << LIBAVUTIL_VERSION_MINOR << "." << LIBAVUTIL_VERSION_MICRO
-            << ", swscale version " << LIBSWSCALE_VERSION_MAJOR << "."
-            << LIBSWSCALE_VERSION_MINOR << "." << LIBSWSCALE_VERSION_MICRO;
+        str << "ffmpeg: avformat version " << LIBAVFORMAT_VERSION_MAJOR << "." << LIBAVFORMAT_VERSION_MINOR << "."
+            << LIBAVFORMAT_VERSION_MICRO << ", avcodec version " << LIBAVCODEC_VERSION_MAJOR << "." << LIBAVCODEC_VERSION_MINOR << "."
+            << LIBAVCODEC_VERSION_MICRO << ", avutil version " << LIBAVUTIL_VERSION_MAJOR << "." << LIBAVUTIL_VERSION_MINOR << "."
+            << LIBAVUTIL_VERSION_MICRO << ", swscale version " << LIBSWSCALE_VERSION_MAJOR << "." << LIBSWSCALE_VERSION_MINOR << "."
+            << LIBSWSCALE_VERSION_MICRO;
 
         return str.str();
     }
 
-    void MovieFFMpegIO::collectParameters(const AVClass* avClass,
-                                          MovieIO::ParameterVector* eparams,
-                                          MovieIO::ParameterVector* dparams,
+    void MovieFFMpegIO::collectParameters(const AVClass* avClass, MovieIO::ParameterVector* eparams, MovieIO::ParameterVector* dparams,
                                           string codec, string prefix)
 
     {
@@ -6449,8 +6031,7 @@ namespace TwkMovie
                     bool first = true;
                     while ((u = av_opt_next(&avClass, u)))
                     {
-                        if (u->type == AV_OPT_TYPE_CONST && u->unit
-                            && !strcmp(u->unit, o->unit))
+                        if (u->type == AV_OPT_TYPE_CONST && u->unit && !strcmp(u->unit, o->unit))
                         {
                             if (!first)
                                 description += ", ";
@@ -6464,13 +6045,11 @@ namespace TwkMovie
                 }
                 if (o->flags & AV_OPT_FLAG_ENCODING_PARAM)
                 {
-                    eparams->push_back(
-                        MovieIO::Parameter(name.c_str(), description, codec));
+                    eparams->push_back(MovieIO::Parameter(name.c_str(), description, codec));
                 }
                 if (o->flags & AV_OPT_FLAG_DECODING_PARAM)
                 {
-                    dparams->push_back(
-                        MovieIO::Parameter(name.c_str(), description, codec));
+                    dparams->push_back(MovieIO::Parameter(name.c_str(), description, codec));
                 }
             }
         }
@@ -6478,9 +6057,7 @@ namespace TwkMovie
 
     MovieFFMpegIO::MFFormatMap MovieFFMpegIO::getFormats() const
     {
-        unsigned int audcap = MovieIO::MovieReadAudio | MovieIO::MovieWriteAudio
-                              | MovieIO::AttributeRead
-                              | MovieIO::AttributeWrite;
+        unsigned int audcap = MovieIO::MovieReadAudio | MovieIO::MovieWriteAudio | MovieIO::AttributeRead | MovieIO::AttributeWrite;
 
         unsigned int vidcap = MovieIO::MovieRead | MovieIO::MovieWrite | audcap;
 
@@ -6495,6 +6072,7 @@ namespace TwkMovie
         // Video
         formats["avi"] = make_pair("Audio Video Interleave", vidcap);
         formats["flv"] = make_pair("Flash Video", vidcap);
+        formats["gif"] = make_pair("Graphics Interchange Format", vidcap);
         formats["m3u8"] = make_pair("M3U8 Stream Metadata", vidcap);
         formats["m4v"] = make_pair("iTunes Video Format (from MPEG-4)", vidcap);
         formats["mkv"] = make_pair("Matroska Video", vidcap);
@@ -6519,38 +6097,22 @@ namespace TwkMovie
         return formats;
     }
 
-    void MovieFFMpegIO::getMovieInfo(const string& filename,
-                                     MovieInfo& minfo) const
+    void MovieFFMpegIO::getMovieInfo(const string& filename, MovieInfo& minfo) const
     {
         MovieFFMpegReader mov(this);
         mov.open(filename);
         minfo = mov.info();
     }
 
-    string MovieFFMpegIO::language() const
-    {
-        return getStringAttribute("language");
-    }
+    string MovieFFMpegIO::language() const { return getStringAttribute("language"); }
 
-    int MovieFFMpegIO::bruteForce() const
-    {
-        return getIntAttribute("bruteForce");
-    }
+    int MovieFFMpegIO::bruteForce() const { return getIntAttribute("bruteForce"); }
 
-    int MovieFFMpegIO::codecThreads() const
-    {
-        return getIntAttribute("codecThreads");
-    }
+    int MovieFFMpegIO::codecThreads() const { return getIntAttribute("codecThreads"); }
 
-    MovieReader* MovieFFMpegIO::movieReader() const
-    {
-        return new MovieFFMpegReader(this);
-    }
+    MovieReader* MovieFFMpegIO::movieReader() const { return new MovieFFMpegReader(this); }
 
-    MovieWriter* MovieFFMpegIO::movieWriter() const
-    {
-        return new MovieFFMpegWriter(this);
-    }
+    MovieWriter* MovieFFMpegIO::movieWriter() const { return new MovieFFMpegWriter(this); }
 
     bool MovieFFMpegIO::codecIsAllowed(string name, bool forRead) const
     {
@@ -6561,8 +6123,5 @@ namespace TwkMovie
 #endif
     }
 
-    double MovieFFMpegIO::defaultFPS() const
-    {
-        return getDoubleAttribute("defaultFPS");
-    }
+    double MovieFFMpegIO::defaultFPS() const { return getDoubleAttribute("defaultFPS"); }
 } // namespace TwkMovie

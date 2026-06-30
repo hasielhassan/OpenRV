@@ -10,10 +10,7 @@
 # Some clone on GitHub https://github.com/glennrp/libpng
 #
 
-INCLUDE(ProcessorCount) # require CMake 3.15+
-PROCESSORCOUNT(_cpu_count)
-
-RV_CREATE_STANDARD_DEPS_VARIABLES("RV_DEPS_PNG" "1.6.48" "" "")
+RV_CREATE_STANDARD_DEPS_VARIABLES("RV_DEPS_PNG" "${RV_DEPS_PNG_VERSION}" "" "")
 RV_SHOW_STANDARD_DEPS_VARIABLES()
 
 SET(_download_url
@@ -21,16 +18,16 @@ SET(_download_url
 )
 
 SET(_download_hash
-    "be6cc9e411c26115db3b9eab1159a1d9"
+    ${RV_DEPS_PNG_DOWNLOAD_HASH}
 )
 
 SET(_libpng_lib_version
-    "16.48.0"
+    "${_version_major}${_version_minor}.${_version_patch}.0"
 )
 IF(NOT RV_TARGET_WINDOWS)
-  RV_MAKE_STANDARD_LIB_NAME("png16" "${_libpng_lib_version}" "SHARED" "d")
+  RV_MAKE_STANDARD_LIB_NAME("png${_version_major}${_version_minor}" "${_libpng_lib_version}" "SHARED" "d")
 ELSE()
-  RV_MAKE_STANDARD_LIB_NAME("libpng16" "${_libpng_lib_version}" "SHARED" "d")
+  RV_MAKE_STANDARD_LIB_NAME("libpng${_version_major}${_version_minor}" "${_libpng_lib_version}" "SHARED" "d")
 ENDIF()
 # The '_configure_options' list gets reset and initialized in 'RV_CREATE_STANDARD_DEPS_VARIABLES' Future: The main branch of libpng has deprecated
 # 'PNG_EXECUTABLES' in favor of 'PNG_TOOLS'.
@@ -38,6 +35,9 @@ LIST(APPEND _configure_options "-DZLIB_ROOT=${RV_DEPS_ZLIB_ROOT_DIR}")
 LIST(APPEND _configure_options "-DPNG_EXECUTABLES=OFF")
 LIST(APPEND _configure_options "-DPNG_TESTS=OFF")
 LIST(APPEND _configure_options "-DPNG_FRAMEWORK=OFF")
+
+# Disable PNG's automatic rpath setup to avoid conflicts with RV's rpath management
+LIST(APPEND _configure_options "-DCMAKE_INSTALL_RPATH=")
 
 EXTERNALPROJECT_ADD(
   ${_target}
@@ -59,40 +59,40 @@ EXTERNALPROJECT_ADD(
   USES_TERMINAL_BUILD TRUE
 )
 
-# The macro is using existing _target, _libname, _lib_dir and _bin_dir variabless
-RV_COPY_LIB_BIN_FOLDERS()
+RV_STAGE_DEPENDENCY_LIBS(TARGET ${_target} LIBNAME ${_libname})
 
-ADD_DEPENDENCIES(dependencies ${_target}-stage-target)
-
-ADD_LIBRARY(PNG::PNG SHARED IMPORTED GLOBAL)
-ADD_DEPENDENCIES(PNG::PNG ${_target})
 IF(NOT RV_TARGET_WINDOWS)
-  SET_PROPERTY(
-    TARGET PNG::PNG
-    PROPERTY IMPORTED_LOCATION ${_libpath}
-  )
-  SET_PROPERTY(
-    TARGET PNG::PNG
-    PROPERTY IMPORTED_SONAME ${_libname}
+  RV_ADD_IMPORTED_LIBRARY(
+    NAME
+    PNG::PNG
+    TYPE
+    SHARED
+    LOCATION
+    ${_libpath}
+    SONAME
+    ${_libname}
+    INCLUDE_DIRS
+    ${_include_dir}
+    DEPENDS
+    ${_target}
+    ADD_TO_DEPS_LIST
   )
 ELSE()
   # An import library (.lib) file is often used to resolve references to functions and variables in a DLL, enabling the linker to generate code for loading the
   # DLL and calling its functions at runtime.
-  SET_PROPERTY(
-    TARGET PNG::PNG
-    PROPERTY IMPORTED_LOCATION "${_implibpath}"
-  )
-  SET_PROPERTY(
-    TARGET PNG::PNG
-    PROPERTY IMPORTED_IMPLIB ${_implibpath}
+  RV_ADD_IMPORTED_LIBRARY(
+    NAME
+    PNG::PNG
+    TYPE
+    SHARED
+    LOCATION
+    ${_implibpath}
+    IMPLIB
+    ${_implibpath}
+    INCLUDE_DIRS
+    ${_include_dir}
+    DEPENDS
+    ${_target}
+    ADD_TO_DEPS_LIST
   )
 ENDIF()
-
-# It is required to force directory creation at configure time otherwise CMake complains about importing a non-existing path
-FILE(MAKE_DIRECTORY "${_include_dir}")
-TARGET_INCLUDE_DIRECTORIES(
-  PNG::PNG
-  INTERFACE ${_include_dir}
-)
-
-LIST(APPEND RV_DEPS_LIST PNG::PNG)

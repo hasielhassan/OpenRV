@@ -47,8 +47,7 @@ namespace TwkGLF
 
     //------------------------constructor and
     // destructor-------------------------
-    BasicGLProgram::BasicGLProgram(const std::string& vertexcode,
-                                   const std::string& fragmentcode)
+    BasicGLProgram::BasicGLProgram(const std::string& vertexcode, const std::string& fragmentcode)
         : m_vertexCode(vertexcode)
         , m_fragmentCode(fragmentcode)
     {
@@ -59,18 +58,12 @@ namespace TwkGLF
 
     //------------------------public
     // functions-----------------------------------
-    const char* BasicGLProgram::identifier() const
-    {
-        return m_identifier.c_str();
-    }
+    const char* BasicGLProgram::identifier() const { return m_identifier.c_str(); }
 
-    const BasicGLProgram*
-    BasicGLProgram::select(const std::string& vertexcode,
-                           const std::string& fragmentcode)
+    const BasicGLProgram* BasicGLProgram::select(const std::string& vertexcode, const std::string& fragmentcode)
     {
         std::string identifier = vertexcode + fragmentcode;
-        ProgramCacheMap::const_iterator i =
-            m_programCache.find(identifier.c_str());
+        ProgramCacheMap::const_iterator i = m_programCache.find(identifier.c_str());
 
         if (i != m_programCache.end())
         {
@@ -92,17 +85,32 @@ namespace TwkGLF
         }
     }
 
+    namespace
+    {
+        // Returns "#version 150\n" for GL3+, empty string for GL2.
+        // Must be called after a GL context is current.
+        const char* basicGLVersionHeader()
+        {
+            const char* glVersion = (const char*)glGetString(GL_VERSION);
+            if (glVersion && glVersion[0] >= '3')
+                return "#version 150\n";
+            return "";
+        }
+    } // namespace
+
     bool BasicGLProgram::compile()
     {
         GLuint v, f;
         m_programId = glCreateProgram();
         v = glCreateShader(GL_VERTEX_SHADER);
         f = glCreateShader(GL_FRAGMENT_SHADER);
-        const char* vcode = m_vertexCode.c_str();
-        glShaderSource(v, 1, &vcode, NULL);
+
+        const char* versionHeader = basicGLVersionHeader();
+        const char* vsrc[2] = {versionHeader, m_vertexCode.c_str()};
+        glShaderSource(v, 2, vsrc, NULL);
         glCompileShader(v);
-        const char* fcode = m_fragmentCode.c_str();
-        glShaderSource(f, 1, &fcode, NULL);
+        const char* fsrc[2] = {versionHeader, m_fragmentCode.c_str()};
+        glShaderSource(f, 2, fsrc, NULL);
         glCompileShader(f);
 
         GLint status = GL_TRUE;
@@ -161,8 +169,7 @@ namespace TwkGLF
             {
                 GLsizei rlen;
                 vector<char> buffer(logsize);
-                glGetProgramInfoLog(m_programId, logsize, &rlen,
-                                    &buffer.front());
+                glGetProgramInfoLog(m_programId, logsize, &rlen, &buffer.front());
                 cout << buffer.front() << endl;
             }
         }
@@ -197,11 +204,9 @@ namespace TwkGLF
     namespace
     {
 
-        const GLProgram* basicGLProgram(const char* vertexShader,
-                                        const char* fragShader)
+        const GLProgram* basicGLProgram(const char* vertexShader, const char* fragShader)
         {
-            if (const BasicGLProgram* glprogram =
-                    BasicGLProgram::select(vertexShader, fragShader))
+            if (const BasicGLProgram* glprogram = BasicGLProgram::select(vertexShader, fragShader))
             {
                 return glprogram;
             }
@@ -212,110 +217,48 @@ namespace TwkGLF
         }
     } // namespace
 
-    const GLProgram* defaultGLProgram()
-    {
-        return basicGLProgram(DefaultVertex_glsl, DefaultFrag_glsl);
-    }
+    const GLProgram* defaultGLProgram() { return basicGLProgram(DefaultVertex_glsl, DefaultFrag_glsl); }
 
     // this is called TextureGL program because it is a simple program just like
     // the default one, except that it uses one texture
-    const GLProgram* textureGLProgram()
-    {
-        return basicGLProgram(TextureVertex_glsl, TextureFrag_glsl);
-    }
+    const GLProgram* textureGLProgram() { return basicGLProgram(TextureVertex_glsl, TextureFrag_glsl); }
 
     // this is called TextureGL program because it is a simple program just like
     // the default one, except that it uses one texture2DRect
-    const GLProgram* textureRectGLProgram()
-    {
-        return basicGLProgram(TextureVertex_glsl, TexRectFrag_glsl);
-    }
+    const GLProgram* textureRectGLProgram() { return basicGLProgram(TextureVertex_glsl, TexRectFrag_glsl); }
 
-    const GLProgram* checkerBGGLProgram()
-    {
-        return basicGLProgram(TextureVertex_glsl, CheckerboardBGFrag_glsl);
-    }
+    const GLProgram* checkerBGGLProgram() { return basicGLProgram(TextureVertex_glsl, CheckerboardBGFrag_glsl); }
 
-    const GLProgram* crosshatchBGGLProgram()
-    {
-        return basicGLProgram(TextureVertex_glsl, CrosshatchBGFrag_glsl);
-    }
+    const GLProgram* crosshatchBGGLProgram() { return basicGLProgram(TextureVertex_glsl, CrosshatchBGFrag_glsl); }
 
-    const GLProgram* stereoScanlineGLProgram()
-    {
-        return basicGLProgram(TextureVertex_glsl, StereoScanlineFrag_glsl);
-    }
+    const GLProgram* stereoScanlineGLProgram() { return basicGLProgram(TextureVertex_glsl, StereoScanlineFrag_glsl); }
 
-    const GLProgram* stereoCheckerGLProgram()
-    {
-        return basicGLProgram(TextureVertex_glsl, StereoCheckerFrag_glsl);
-    }
+    const GLProgram* stereoCheckerGLProgram() { return basicGLProgram(TextureVertex_glsl, StereoCheckerFrag_glsl); }
 
-    const GLProgram* paintOldReplaceGLProgram()
-    {
-        return basicGLProgram(ReplaceVertex_glsl, OldReplaceFrag_glsl);
-    }
+    const GLProgram* paintOldReplaceGLProgram() { return basicGLProgram(ReplaceVertex_glsl, OldReplaceFrag_glsl); }
 
-    const GLProgram* softPaintOldReplaceGLProgram()
-    {
-        return basicGLProgram(ReplaceVertex_glsl, SoftOldReplaceFrag_glsl);
-    }
+    const GLProgram* softPaintOldReplaceGLProgram() { return basicGLProgram(ReplaceVertex_glsl, SoftOldReplaceFrag_glsl); }
 
-    const GLProgram* paintReplaceGLProgram()
-    {
-        return basicGLProgram(ReplaceVertex_glsl, ReplaceFrag_glsl);
-    }
+    const GLProgram* paintReplaceGLProgram() { return basicGLProgram(ReplaceVertex_glsl, ReplaceFrag_glsl); }
 
-    const GLProgram* softPaintReplaceGLProgram()
-    {
-        return basicGLProgram(ReplaceVertex_glsl, SoftReplaceFrag_glsl);
-    }
+    const GLProgram* softPaintReplaceGLProgram() { return basicGLProgram(ReplaceVertex_glsl, SoftReplaceFrag_glsl); }
 
-    const GLProgram* paintEraseGLProgram()
-    {
-        return basicGLProgram(EraseVertex_glsl, EraseFrag_glsl);
-    }
+    const GLProgram* paintEraseGLProgram() { return basicGLProgram(EraseVertex_glsl, EraseFrag_glsl); }
 
-    const GLProgram* softPaintEraseGLProgram()
-    {
-        return basicGLProgram(EraseVertex_glsl, SoftEraseFrag_glsl);
-    }
+    const GLProgram* softPaintEraseGLProgram() { return basicGLProgram(EraseVertex_glsl, SoftEraseFrag_glsl); }
 
-    const GLProgram* paintCloneGLProgram()
-    {
-        return basicGLProgram(CloneVertex_glsl, CloneFrag_glsl);
-    }
+    const GLProgram* paintCloneGLProgram() { return basicGLProgram(CloneVertex_glsl, CloneFrag_glsl); }
 
-    const GLProgram* softPaintCloneGLProgram()
-    {
-        return basicGLProgram(CloneVertex_glsl, SoftCloneFrag_glsl);
-    }
+    const GLProgram* softPaintCloneGLProgram() { return basicGLProgram(CloneVertex_glsl, SoftCloneFrag_glsl); }
 
-    const GLProgram* paintScaleGLProgram()
-    {
-        return basicGLProgram(ScaleVertex_glsl, ScaleFrag_glsl);
-    }
+    const GLProgram* paintScaleGLProgram() { return basicGLProgram(ScaleVertex_glsl, ScaleFrag_glsl); }
 
-    const GLProgram* softPaintScaleGLProgram()
-    {
-        return basicGLProgram(ScaleVertex_glsl, SoftScaleFrag_glsl);
-    }
+    const GLProgram* softPaintScaleGLProgram() { return basicGLProgram(ScaleVertex_glsl, SoftScaleFrag_glsl); }
 
-    const GLProgram* directionPaintGLProgram()
-    {
-        return basicGLProgram(DirectionPaintVertex_glsl,
-                              DirectionPaintFrag_glsl);
-    }
+    const GLProgram* directionPaintGLProgram() { return basicGLProgram(DirectionPaintVertex_glsl, DirectionPaintFrag_glsl); }
 
-    const GLProgram* softDirectionPaintGLProgram()
-    {
-        return basicGLProgram(DirectionPaintVertex_glsl,
-                              SoftDirectionPaintFrag_glsl);
-    }
+    const GLProgram* softDirectionPaintGLProgram() { return basicGLProgram(DirectionPaintVertex_glsl, SoftDirectionPaintFrag_glsl); }
 
-    const GLProgram* paintTessellateGLProgram()
-    {
-        return basicGLProgram(ReplaceColoredVertex_glsl, PaintColoredFrag_glsl);
-    }
+    const GLProgram* paintTessellateGLProgram() { return basicGLProgram(ReplaceColoredVertex_glsl, PaintColoredFrag_glsl); }
 
 } // namespace TwkGLF

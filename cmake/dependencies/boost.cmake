@@ -9,63 +9,15 @@
 #
 # Starting from CMake 3.30, FindBoost.cmake has been removed in favor of BoostConfig.cmake (Boost 1.70+). This behavior is covered by CMake policy CMP0167.
 
-INCLUDE(ProcessorCount) # require CMake 3.15+
-PROCESSORCOUNT(_cpu_count)
-
-IF(RV_VFX_PLATFORM STREQUAL CY2023)
-  # Note: Boost 1.80 cannot be built with XCode 15 which is now the only XCode version available on macOS Sonoma without a hack. Boost 1.81+ has all the fixes
-  # required to be able to be built with XCode 15, however it is not VFX Platform CY2023 compliant which specifies Boost version 1.80. With the aim of making
-  # the OpenRV build on macOS smoother by default, OpenRV will use Boost 1.81 if XCode 15 or more recent.
-  IF(RV_TARGET_DARWIN)
-    EXECUTE_PROCESS(
-      COMMAND xcrun clang --version
-      OUTPUT_VARIABLE CLANG_FULL_VERSION_STRING
-    )
-    STRING(
-      REGEX
-      REPLACE ".*clang version ([0-9]+\\.[0-9]+).*" "\\1" CLANG_VERSION_STRING ${CLANG_FULL_VERSION_STRING}
-    )
-    IF(CLANG_VERSION_STRING VERSION_GREATER_EQUAL 15.0)
-      MESSAGE(STATUS "Clang version ${CLANG_VERSION_STRING} is not compatible with Boost 1.80, using Boost 1.81 instead. "
-                     "Install XCode 14.3.1 if you absolutely want to use Boost version 1.80 as per VFX reference platform CY2023"
-      )
-      SET(_BOOST_DETECTED_XCODE_15_
-          ON
-      )
-    ENDIF()
-  ENDIF()
-ENDIF()
-
-# Set some variables for VFX2024 since those value are used at two locations.
-SET(_BOOST_VFX2024_VERSION_
-    "1.82.0"
+SET(_ext_boost_version
+    ${RV_DEPS_BOOST_VERSION}
 )
-SET(_BOOST_VFX2024_MAJOR_MINOR_VERSION_
-    "1_82"
+SET(_major_minor_version
+    ${RV_DEPS_BOOST_MAJOR_MINOR_VERSION}
 )
-SET(_BOOST_VFX2024_DOWNLOAD_HASH_
-    "f7050f554a65f6a42ece221eaeec1660"
+SET(_download_hash
+    ${RV_DEPS_BOOST_DOWNLOAD_HASH}
 )
-
-IF(NOT _BOOST_DETECTED_XCODE_15_)
-  # XCode 14 and below.
-  RV_VFX_SET_VARIABLE(_ext_boost_version CY2023 "1.80.0" CY2024 "${_BOOST_VFX2024_VERSION_}")
-
-  RV_VFX_SET_VARIABLE(_major_minor_version CY2023 "1_80" CY2024 "${_BOOST_VFX2024_MAJOR_MINOR_VERSION_}")
-
-  RV_VFX_SET_VARIABLE(_download_hash CY2023 "077f074743ea7b0cb49c6ed43953ae95" CY2024 "${_BOOST_VFX2024_DOWNLOAD_HASH_}")
-ELSE()
-  # XCode 15 and above. (Need Boost 1.81+)
-  RV_VFX_SET_VARIABLE(
-    _ext_boost_version
-    # Use Boost 1.81.0 for VFX2023 (Boost 1.80.0 does not work with XCode 15)
-    CY2023 "1.81.0" CY2024 "${_BOOST_VFX2024_VERSION_}"
-  )
-
-  RV_VFX_SET_VARIABLE(_major_minor_version CY2023 "1_81" CY2024 "${_BOOST_VFX2024_MAJOR_MINOR_VERSION_}")
-
-  RV_VFX_SET_VARIABLE(_download_hash CY2023 "4bf02e84afb56dfdccd1e6aec9911f4b" CY2024 "${_BOOST_VFX2024_DOWNLOAD_HASH_}")
-ENDIF()
 
 RV_CREATE_STANDARD_DEPS_VARIABLES("RV_DEPS_BOOST" "${_ext_boost_version}" "" "")
 RV_SHOW_STANDARD_DEPS_VARIABLES()
@@ -73,19 +25,6 @@ RV_SHOW_STANDARD_DEPS_VARIABLES()
 STRING(REPLACE "." "_" _version_with_underscore ${_version})
 SET(_download_url
     "https://archives.boost.io/release/${_version}/source/boost_${_version_with_underscore}.tar.gz"
-)
-
-# Set _base_dir for Clean-<target>
-SET(_base_dir
-    ${RV_DEPS_BASE_DIR}/${_target}
-)
-
-SET(_install_dir
-    ${RV_DEPS_BASE_DIR}/${_target}/install
-)
-
-SET(${_target}_ROOT_DIR
-    ${_install_dir}
 )
 
 SET(_boost_libs
@@ -300,31 +239,9 @@ SET_TARGET_PROPERTIES(
   PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_include_dir}"
 )
 
+# Note: On Windows, Boost's b2 puts both .lib and .dll in lib/, so we copy _lib_dir to both RV_STAGE_LIB_DIR and RV_STAGE_BIN_DIR.
 IF(RV_TARGET_WINDOWS)
-  ADD_CUSTOM_COMMAND(
-    TARGET ${_target}
-    POST_BUILD
-    COMMENT "Installing ${_target}'s libs and bin into ${RV_STAGE_LIB_DIR} and ${RV_STAGE_BIN_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_lib_dir} ${RV_STAGE_LIB_DIR}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_lib_dir} ${RV_STAGE_BIN_DIR}
-  )
+  RV_STAGE_DEPENDENCY_LIBS(TARGET ${_target} EXTRA_LIB_DIRS ${RV_STAGE_BIN_DIR} OUTPUTS ${_boost_stage_output})
 ELSE()
-  ADD_CUSTOM_COMMAND(
-    COMMENT "Installing ${_target}'s libs into ${RV_STAGE_LIB_DIR}"
-    OUTPUT ${_boost_stage_output}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_lib_dir} ${RV_STAGE_LIB_DIR}
-    DEPENDS ${_target}
-  )
+  RV_STAGE_DEPENDENCY_LIBS(TARGET ${_target} OUTPUTS ${_boost_stage_output})
 ENDIF()
-
-ADD_CUSTOM_TARGET(
-  ${_target}-stage-target ALL
-  DEPENDS ${_boost_stage_output}
-)
-
-ADD_DEPENDENCIES(dependencies ${_target}-stage-target)
-
-SET(RV_DEPS_BOOST_VERSION
-    ${_version}
-    CACHE INTERNAL "" FORCE
-)

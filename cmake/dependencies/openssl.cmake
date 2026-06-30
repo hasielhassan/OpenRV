@@ -7,6 +7,9 @@
 SET(_target
     "RV_DEPS_OPENSSL"
 )
+SET(_version
+    ${RV_DEPS_OPENSSL_VERSION}
+)
 
 IF(RV_TARGET_IS_RHEL8
    AND RV_VFX_PLATFORM STREQUAL CY2023
@@ -40,8 +43,6 @@ ELSE()
       "RV_DEPS_OPENSSL"
   )
 
-  RV_VFX_SET_VARIABLE(_version CY2023 "1.1.1u" CY2024 "3.4.0")
-
   STRING(REPLACE "." "_" _version_underscored ${_version})
 
   IF(RV_TARGET_WINDOWS
@@ -68,7 +69,15 @@ ELSE()
   )
 
   IF(RHEL_VERBOSE)
-    RV_VFX_SET_VARIABLE(_lib_dir CY2023 "${RV_DEPS_OPENSSL_INSTALL_DIR}/lib" CY2024 "${RV_DEPS_OPENSSL_INSTALL_DIR}/lib64")
+    IF(RV_VFX_PLATFORM STREQUAL "CY2023")
+      SET(_lib_dir
+          "${RV_DEPS_OPENSSL_INSTALL_DIR}/lib"
+      )
+    ELSEIF(RV_VFX_PLATFORM STRGREATER_EQUAL "CY2024")
+      SET(_lib_dir
+          "${RV_DEPS_OPENSSL_INSTALL_DIR}/lib64"
+      )
+    ENDIF()
   ELSE()
     SET(_lib_dir
         ${RV_DEPS_OPENSSL_INSTALL_DIR}/lib
@@ -79,12 +88,19 @@ ELSE()
       ${RV_DEPS_OPENSSL_INSTALL_DIR}/bin
   )
 
-  RV_VFX_SET_VARIABLE(
-    _download_url CY2023 "https://github.com/openssl/openssl/releases/download/OpenSSL_${_version_underscored}/openssl-${_version}.tar.gz" CY2024
-    "https://github.com/openssl/openssl/releases/download/openssl-${_version}/openssl-${_version}.tar.gz"
-  )
+  IF(${_version} STREQUAL "1.1.1u")
+    SET(_download_url
+        "https://github.com/openssl/openssl/releases/download/OpenSSL_${_version_underscored}/openssl-${_version}.tar.gz"
+    )
+  ELSE()
+    SET(_download_url
+        "https://github.com/openssl/openssl/releases/download/openssl-${_version}/openssl-${_version}.tar.gz"
+    )
+  ENDIF()
 
-  RV_VFX_SET_VARIABLE(_download_hash CY2023 "72f7ba7395f0f0652783ba1089aa0dcc" CY2024 "34733f7be2d60ecd8bd9ddb796e182af")
+  SET(_download_hash
+      ${RV_DEPS_OPENSSL_HASH}
+  )
 
   SET(_make_command_script
       "${PROJECT_SOURCE_DIR}/src/build/make_openssl.py"
@@ -99,8 +115,8 @@ ELSE()
   LIST(APPEND _make_command ${RV_DEPS_OPENSSL_INSTALL_DIR})
 
   LIST(APPEND _make_command "--vfx_platform")
-  RV_VFX_SET_VARIABLE(_vfx_platform_ CY2023 "2023" CY2024 "2024")
-  LIST(APPEND _make_command ${_vfx_platform_})
+
+  LIST(APPEND _make_command ${RV_VFX_CY_YEAR})
 
   IF(RV_TARGET_WINDOWS)
     LIST(APPEND _make_command "--perlroot")
@@ -131,8 +147,12 @@ ELSE()
 
   # Ref: https://github.com/openssl/openssl/blob/398011848468c7e8e481b295f7904afc30934217/INSTALL.md?plain=1#L1847-L1858
 
-  RV_VFX_SET_VARIABLE(_dot_version CY2023 ".1.1" CY2024 ".3")
-  RV_VFX_SET_VARIABLE(_underscore_version CY2023 "1_1" CY2024 "3")
+  SET(_dot_version
+      ${RV_DEPS_OPENSSL_VERSION_DOT}
+  )
+  SET(_underscore_version
+      ${RV_DEPS_OPENSSL_VERSION_UNDERSCORE}
+  )
 
   IF(RV_TARGET_LINUX)
     SET(_crypto_lib_name
@@ -253,8 +273,9 @@ ELSE()
       COMMAND ${CMAKE_COMMAND} -E copy ${RV_DEPS_OPENSSL_INSTALL_DIR}/lib/libssl.lib ${_lib_dir}/ssl.lib
       COMMAND ${CMAKE_COMMAND} -E copy ${RV_DEPS_OPENSSL_INSTALL_DIR}/lib/libcrypto.lib ${_lib_dir}/crypto.lib
     )
+    # Copy import libs to stage lib dir and specific DLLs to stage bin dir
     ADD_CUSTOM_COMMAND(
-      COMMENT "Installing ${_target}'s libs and bin into ${RV_STAGE_LIB_DIR} and ${RV_STAGE_BIN_DIR}"
+      COMMENT "Staging ${_target} libs into ${RV_STAGE_LIB_DIR} and ${RV_STAGE_BIN_DIR}"
       OUTPUT ${RV_STAGE_BIN_DIR}/${_crypto_lib_name} ${RV_STAGE_BIN_DIR}/${_ssl_lib_name}
       COMMAND ${CMAKE_COMMAND} -E copy_directory ${_lib_dir} ${RV_STAGE_LIB_DIR}
       COMMAND ${CMAKE_COMMAND} -E copy ${_bin_dir}/${_crypto_lib_name} ${RV_STAGE_BIN_DIR}
@@ -263,8 +284,9 @@ ELSE()
     )
     ADD_CUSTOM_TARGET(
       ${_target}-stage-target ALL
-      DEPENDS ${RV_STAGE_LIB_DIR}/${_crypto_lib_name} ${RV_STAGE_LIB_DIR}/${_ssl_lib_name}
+      DEPENDS ${RV_STAGE_BIN_DIR}/${_crypto_lib_name} ${RV_STAGE_BIN_DIR}/${_ssl_lib_name}
     )
+    ADD_DEPENDENCIES(dependencies ${_target}-stage-target)
   ELSE()
 
     # Because RHEL8 has the same version of openssl library as we use but is not compatible with our library, we will copy openssl into its own seperate lib
@@ -277,19 +299,16 @@ ELSE()
       )
     ENDIF()
 
-    ADD_CUSTOM_COMMAND(
-      COMMENT "Installing ${_target}'s libs into ${_openssl_stage_lib_dir}"
-      OUTPUT ${_openssl_stage_lib_dir}/${_crypto_lib_name} ${_openssl_stage_lib_dir}/${_ssl_lib_name}
-      COMMAND ${CMAKE_COMMAND} -E copy_directory ${_lib_dir} ${_openssl_stage_lib_dir}
-      DEPENDS ${_target}
-    )
-    ADD_CUSTOM_TARGET(
-      ${_target}-stage-target ALL
-      DEPENDS ${_openssl_stage_lib_dir}/${_crypto_lib_name} ${_openssl_stage_lib_dir}/${_ssl_lib_name}
+    RV_STAGE_DEPENDENCY_LIBS(
+      TARGET
+      ${_target}
+      STAGE_LIB_DIR
+      ${_openssl_stage_lib_dir}
+      OUTPUTS
+      ${_openssl_stage_lib_dir}/${_crypto_lib_name}
+      ${_openssl_stage_lib_dir}/${_ssl_lib_name}
     )
   ENDIF()
-
-  ADD_DEPENDENCIES(dependencies ${_target}-stage-target)
 
   SET(RV_DEPS_OPENSSL_VERSION
       ${_version}

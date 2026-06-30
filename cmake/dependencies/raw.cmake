@@ -5,15 +5,11 @@
 #
 
 #
-# LibRaw official Web page: https://www.libraw.org/about
-# LibRaw official sources:  https://www.libraw.org/data/LibRaw-0.21.1.tar.gz
-# LibRaw build from sources: https://www.libraw.org/docs/Install-LibRaw-eng.html
+# LibRaw official Web page: https://www.libraw.org/about LibRaw official sources:  https://www.libraw.org/data/LibRaw-0.21.1.tar.gz LibRaw build from sources:
+# https://www.libraw.org/docs/Install-LibRaw-eng.html
 #
 
-INCLUDE(ProcessorCount) # require CMake 3.15+
-PROCESSORCOUNT(_cpu_count)
-
-RV_CREATE_STANDARD_DEPS_VARIABLES("RV_DEPS_RAW" "0.21.1" "make" "../src/configure")
+RV_CREATE_STANDARD_DEPS_VARIABLES("RV_DEPS_RAW" "${RV_DEPS_RAW_VERSION}" "make" "../src/configure")
 IF(RV_TARGET_LINUX)
   # Overriding _lib_dir created in 'RV_CREATE_STANDARD_DEPS_VARIABLES' since this CMake-based project isn't using lib64
   SET(_lib_dir
@@ -27,11 +23,12 @@ SET(_download_url
 )
 
 SET(_download_hash
-    "3ad334296a7a2c8ee841f353cc1b450b"
+    "${RV_DEPS_RAW_DOWNLOAD_HASH}"
 )
 
+# LIBRAW_SHLIB_CURRENT value in libraw_version.h https://github.com/LibRaw/LibRaw/blob/master/libraw/libraw_version.h
 SET(_libraw_lib_version
-    "23"
+    ${RV_DEPS_RAW_VERSION_LIB}
 )
 IF(NOT RV_TARGET_WINDOWS)
   RV_MAKE_STANDARD_LIB_NAME("raw" "${_libraw_lib_version}" "SHARED" "")
@@ -40,6 +37,17 @@ ELSE()
 ENDIF()
 
 IF(RV_TARGET_WINDOWS)
+  FIND_PROGRAM(_jom_executable jom)
+  IF(_jom_executable)
+    SET(_libraw_build_command
+        ${_jom_executable} /J${_cpu_count} /f Makefile.msvc
+    )
+  ELSE()
+    SET(_libraw_build_command
+        nmake /f Makefile.msvc
+    )
+  ENDIF()
+
   EXTERNALPROJECT_ADD(
     ${_target}
     URL ${_download_url}
@@ -51,7 +59,7 @@ IF(RV_TARGET_WINDOWS)
     INSTALL_DIR ${_install_dir}
     DEPENDS ZLIB::ZLIB
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND nmake /f Makefile.msvc
+    BUILD_COMMAND ${_libraw_build_command}
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE TRUE
     BUILD_ALWAYS FALSE
@@ -67,8 +75,7 @@ IF(RV_TARGET_WINDOWS)
     COMMENT "Installing ${_target}'s libs & files into ${_install_dir}"
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${_base_dir}/src/lib ${_lib_dir}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${_base_dir}/src/libraw ${_include_dir}/libraw
-    # Copy only the DLL on Windows because there is no option to disable the "examples/samples" 
-    # with Makefile.msvc.
+    # Copy only the DLL on Windows because there is no option to disable the "examples/samples" with Makefile.msvc.
     COMMAND ${CMAKE_COMMAND} -E make_directory ${_bin_dir}
     COMMAND ${CMAKE_COMMAND} -E copy ${_base_dir}/src/bin/${_libname} ${_bin_dir}
     COMMAND ${CMAKE_COMMAND} -E rm ${_lib_dir}/Makefile
@@ -91,9 +98,7 @@ ELSE()
   )
 
   SET(_configure_command
-    ${CMAKE_COMMAND} -E env LCMS2_CFLAGS='${_lcms2_flags}'
-    ${CMAKE_COMMAND} -E env LCMS2_LIBS='${_lcms2_libs}'
-    ${_configure_command}
+      ${CMAKE_COMMAND} -E env LCMS2_CFLAGS='${_lcms2_flags}' ${CMAKE_COMMAND} -E env LCMS2_LIBS='${_lcms2_libs}' ${_configure_command}
   )
 
   EXTERNALPROJECT_ADD(
@@ -118,33 +123,22 @@ ELSE()
   )
 ENDIF()
 
-# The macro is using existing _target, _libname, _lib_dir and _bin_dir variabless
-RV_COPY_LIB_BIN_FOLDERS()
+RV_STAGE_DEPENDENCY_LIBS(TARGET ${_target} LIBNAME ${_libname})
 
-ADD_DEPENDENCIES(dependencies ${_target}-stage-target)
-
-ADD_LIBRARY(Raw::Raw SHARED IMPORTED GLOBAL)
-ADD_DEPENDENCIES(Raw::Raw ${_target})
-SET_PROPERTY(
-  TARGET Raw::Raw
-  PROPERTY IMPORTED_LOCATION ${_libpath}
+RV_ADD_IMPORTED_LIBRARY(
+  NAME
+  LibRaw::raw
+  TYPE
+  SHARED
+  LOCATION
+  ${_libpath}
+  SONAME
+  ${_libname}
+  IMPLIB
+  ${_implibpath}
+  INCLUDE_DIRS
+  ${_include_dir}
+  DEPENDS
+  ${_target}
+  ADD_TO_DEPS_LIST
 )
-SET_PROPERTY(
-  TARGET Raw::Raw
-  PROPERTY IMPORTED_SONAME ${_libname}
-)
-IF(RV_TARGET_WINDOWS)
-  SET_PROPERTY(
-    TARGET Raw::Raw
-    PROPERTY IMPORTED_IMPLIB ${_implibpath}
-  )
-ENDIF()
-
-# It is required to force directory creation at configure time otherwise CMake complains about importing a non-existing path
-FILE(MAKE_DIRECTORY "${_include_dir}")
-TARGET_INCLUDE_DIRECTORIES(
-  Raw::Raw
-  INTERFACE ${_include_dir}
-)
-
-LIST(APPEND RV_DEPS_LIST Raw::Raw)

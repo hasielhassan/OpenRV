@@ -1,4 +1,7 @@
-import argparse, shutil, pathlib, re, sys
+import argparse
+import shutil
+import pathlib
+import re
 
 
 def patch_execute(filename):
@@ -8,7 +11,7 @@ def patch_execute(filename):
     with open(backup_cmakelist_path, "r") as backup_cmakelist:
         with open(filename, "w") as cmakelist:
             for line in backup_cmakelist:
-                if re.match("^\s*set.*_PublicLibs", line):
+                if re.match(r"^\s*set.*_PublicLibs", line, re.IGNORECASE):
                     new_line = line.replace(
                         "set(_PublicLibs ${Python_LIBRARIES})",
                         "set(_PublicLibs ${RV_Python_LIBRARIES})",

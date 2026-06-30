@@ -9,14 +9,14 @@ SET(_target
 )
 
 SET(_version
-    "v2.4.9"
+    ${RV_DEPS_DOCTEST_VERSION}
 )
 
 SET(_download_url
-    "https://github.com/doctest/doctest/archive/refs/tags/${_version}.tar.gz"
+    "https://github.com/doctest/doctest/archive/refs/tags/v${_version}.tar.gz"
 )
 SET(_download_hash
-    "a7948b5ec1f69de6f84c7d7487aaf79b"
+    ${RV_DEPS_DOCTEST_DOWNLOAD_HASH}
 )
 
 SET(_install_dir
@@ -43,9 +43,9 @@ EXTERNALPROJECT_ADD(
   LOG_DOWNLOAD ON
 )
 
-ADD_LIBRARY(doctest INTERFACE)
-ADD_DEPENDENCIES(doctest ${_target})
+ADD_LIBRARY(doctest::doctest INTERFACE IMPORTED GLOBAL)
+ADD_DEPENDENCIES(doctest::doctest ${_target})
 TARGET_INCLUDE_DIRECTORIES(
-  doctest
+  doctest::doctest
   INTERFACE "${RV_DEPS_BASE_DIR}/${_target}/src/${_target}"
 )

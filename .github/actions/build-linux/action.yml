@@ -66,7 +66,7 @@ runs:
           if dnf install -y epel-release && \
              dnf config-manager --set-enabled ${{ inputs.extra_repo }} devel && \
              dnf groupinstall "Development Tools" -y && \
-             dnf install -y alsa-lib-devel autoconf automake avahi-compat-libdns_sd-devel bison bzip2-devel cmake-gui curl-devel flex gcc gcc-c++ git libXcomposite libXi-devel libaio-devel libffi-devel nasm ncurses-devel nss libtool libxkbcommon libXcomposite libXdamage libXrandr libXtst libXcursor mesa-libOSMesa mesa-libOSMesa-devel meson openssl-devel patch pulseaudio-libs pulseaudio-libs-glib2 ocl-icd ocl-icd-devel opencl-headers qt5-qtbase-devel readline-devel sqlite-devel systemd-devel tcl-devel tcsh tk-devel yasm zip zlib-devel wget patchelf pcsc-lite libxkbfile perl-IPC-Cmd && \
+             dnf install -y alsa-lib-devel autoconf automake avahi-compat-libdns_sd-devel bison bzip2-devel cmake-gui curl-devel flex gcc gcc-c++ git libXcomposite libXi-devel libaio-devel libffi-devel nasm ncurses-devel nss libtool libxkbcommon libXcomposite libXdamage libXrandr libXtst libXcursor meson openssl-devel patch pulseaudio-libs pulseaudio-libs-glib2 ocl-icd ocl-icd-devel opencl-headers qt5-qtbase-devel readline-devel sqlite-devel systemd-devel tcl-devel tcsh tk-devel yasm zip zlib-devel wget patchelf pcsc-lite libxkbfile perl-IPC-Cmd && \
              dnf install -y libX11-devel libXext-devel libXrender-devel libXrandr-devel libXcursor-devel libXi-devel libXxf86vm-devel libxkbcommon-devel && \
              dnf install -y xz-devel mesa-libGLU mesa-libGLU-devel && \
              dnf clean all; then
@@ -85,6 +85,11 @@ runs:
           echo "Failed to install dependencies after $max_retries attempts"
           exit 1
         fi
+      shell: bash
+
+    - name: Install mesa-libOSMesa
+      run: |
+        dnf install -y --enablerepo=${{ inputs.extra_repo }},devel mesa-libOSMesa mesa-libOSMesa-devel
       shell: bash
 
     - name: Install other system dependencies

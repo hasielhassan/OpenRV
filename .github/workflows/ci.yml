@@ -21,11 +21,119 @@ on:
         default: 'false'
 
 jobs:
-  detect-changes:
-    if: github.repository_owner == 'AcademySoftwareFoundation'
-    runs-on: ubuntu-latest
-    outputs:
-      cmake_changed: ${{ steps.filter.outputs.cmake }}
+  rocky-linux:
+    name: 'Rocky Linux ${{ matrix.rocky-version }} ${{ matrix.vfx-platform }}
+      <qt=${{ matrix.qt-version }},
+       python=${{ matrix.python-version }},
+       cmake=${{ matrix.cmake-version }},
+       arch=${{ matrix.arch-type }},
+       config=${{ matrix.build-type }}>'
+
+    runs-on: ${{ matrix.os }}
+    container: 
+      image: ${{ matrix.image }}
+      volumes:
+        - /usr/local/lib/android:/github/home/android
+        - /usr/share/dotnet:/github/home/dotnet
+        - /opt/ghc:/github/home/ghc
+        - /usr/local/.ghcup:/github/home/.ghcup
+        - /usr/local/graalvm:/github/home/graalvm
+        - /usr/local/share/powershell:/github/home/powershell
+        - /usr/local/share/chromium:/github/home/chromium
+        - /usr/local/lib/node_modules:/github/home/node_modules
+        - /opt/hostedtoolcache/CodeQL:/github/home/CodeQL
+        - /usr/local/share/boost:/github/home/boost
+        - /usr/lib/jvm:/github/home/powershell
+        - /usr/lib/jvm:/github/home/jvm
+        - /usr/share/swift:/github/home/swift
+        - /opt/hostedtoolcache:/github/home/hostedtoolcache
+        - /swapfile:/github/home/swapfile
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: "ubuntu-latest"
+            rocky-version: "8"
+            image: "amd64/rockylinux:8"
+            arch-type: "x86_64"
+            build-type: "Release"
+            qt-version: "5.15.2"
+            cmake-version: "3.31.6"
+            python-version: "3.10"
+            vfx-platform: "CY2023"
+            extra_repo: "powertools"
+          - os: "ubuntu-latest"
+            rocky-version: "9"
+            image: "amd64/rockylinux:9"
+            arch-type: "x86_64"
+            build-type: "Release"
+            qt-version: "5.15.2"
+            cmake-version: "3.31.6"
+            python-version: "3.10"
+            vfx-platform: "CY2023"
+            extra_repo: "crb"
+          - os: "ubuntu-latest"
+            rocky-version: "8"
+            image: "amd64/rockylinux:8"
+            arch-type: "x86_64"
+            build-type: "Debug"
+            qt-version: "5.15.2"
+            cmake-version: "3.31.6"
+            python-version: "3.10"
+            vfx-platform: "CY2023"
+            extra_repo: "powertools"
+          - os: "ubuntu-latest"
+            rocky-version: "9"
+            image: "amd64/rockylinux:9"
+            arch-type: "x86_64"
+            build-type: "Debug"
+            qt-version: "5.15.2"
+            cmake-version: "3.31.6"
+            python-version: "3.10"
+            vfx-platform: "CY2023"
+            extra_repo: "crb"
+
+          # CY2024
+          - os: "ubuntu-latest"
+            rocky-version: "8"
+            image: "amd64/rockylinux:8"
+            arch-type: "x86_64"
+            build-type: "Release"
+            qt-version: "6.5.3"
+            cmake-version: "3.31.6"
+            python-version: "3.11.8"
+            vfx-platform: "CY2024"
+            extra_repo: "powertools"
+          - os: "ubuntu-latest"
+            rocky-version: "9"
+            image: "amd64/rockylinux:9"
+            arch-type: "x86_64"
+            build-type: "Release"
+            qt-version: "6.5.3"
+            cmake-version: "3.31.6"
+            python-version: "3.11.8"
+            vfx-platform: "CY2024"
+            extra_repo: "crb"
+          - os: "ubuntu-latest"
+            rocky-version: "8"
+            image: "amd64/rockylinux:8"
+            arch-type: "x86_64"
+            build-type: "Debug"
+            qt-version: "6.5.3"
+            cmake-version: "3.31.6"
+            python-version: "3.11.8"
+            vfx-platform: "CY2024"
+            extra_repo: "powertools"
+          - os: "ubuntu-latest"
+            rocky-version: "9"
+            image: "amd64/rockylinux:9"
+            arch-type: "x86_64"
+            build-type: "Debug"
+            qt-version: "6.5.3"
+            cmake-version: "3.31.6"
+            python-version: "3.11.8"
+            vfx-platform: "CY2024"
+            extra_repo: "crb"
     steps:
       - name: Display disk space
         run: |
@@ -45,6 +153,7 @@ jobs:
           rm -rf /github/home/node_modules || true
           rm -rf /github/home/CodeQL || true
           rm -rf /github/home/boost || true
+          rm -rf /github/home/jvm || true
           rm -rf /github/home/swift || true
           rm -rf /github/home/hostedtoolcache || true
           rm -rf /github/home/swapfile || true
@@ -231,6 +340,7 @@ jobs:
           rm -rf /github/home/ghc || true
           rm -rf /github/home/.ghcup || true   
           rm -rf /github/home/powershell || true
+          rm -rf /github/home/jvm || true
           rm -rf /github/home/swift || true
           rm -rf /github/home/hostedtoolcache || true
           rm -rf /github/home/swapfile || true

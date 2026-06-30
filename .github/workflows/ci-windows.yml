@@ -59,6 +59,15 @@ jobs:
           msvc-component: ${{ matrix.msvc-component }}
           msvc-compiler: ${{ matrix.msvc-compiler }}
           qt5_modules: ${{ inputs.qt5_modules }}
+      - name: Package Windows Build Artifacts
+        shell: msys2 {0}
+        run: |
+          zip -r OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip _install/
+      - name: Upload Windows Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}
+          path: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip
 
   # CY2024 Debug — runs when cmake files change or on full matrix
   windows-debug:
@@ -104,6 +113,15 @@ jobs:
           msvc-component: ${{ matrix.msvc-component }}
           msvc-compiler: ${{ matrix.msvc-compiler }}
           qt5_modules: ${{ inputs.qt5_modules }}
+      - name: Package Windows Build Artifacts
+        shell: msys2 {0}
+        run: |
+          zip -r OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip _install/
+      - name: Upload Windows Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}
+          path: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip
 
   # CY2023 — full matrix only (daily/push/dispatch)
   windows-cy2023:
@@ -158,3 +176,12 @@ jobs:
           msvc-component: ${{ matrix.msvc-component }}
           msvc-compiler: ${{ matrix.msvc-compiler }}
           qt5_modules: ${{ inputs.qt5_modules }}
+      - name: Package Windows Build Artifacts
+        shell: msys2 {0}
+        run: |
+          zip -r OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip _install/
+      - name: Upload Windows Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}
+          path: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip

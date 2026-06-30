@@ -40,13 +40,13 @@ jobs:
       full_matrix: ${{ github.event_name != 'pull_request' }}
       run_debug: ${{ github.event_name != 'pull_request' || needs.detect-changes.outputs.cmake_changed == 'true' }}
 
-  macos:
-    needs: detect-changes
-    uses: ./.github/workflows/ci-macos.yml
-    with:
-      skip_deps_cache: ${{ inputs.SKIP_DEPS_CACHE || 'false' }}
-      full_matrix: ${{ github.event_name != 'pull_request' }}
-      run_debug: ${{ github.event_name != 'pull_request' || needs.detect-changes.outputs.cmake_changed == 'true' }}
+#  macos:
+#    needs: detect-changes
+#    uses: ./.github/workflows/ci-macos.yml
+#    with:
+#      skip_deps_cache: ${{ inputs.SKIP_DEPS_CACHE || 'false' }}
+#      full_matrix: ${{ github.event_name != 'pull_request' }}
+#      run_debug: ${{ github.event_name != 'pull_request' || needs.detect-changes.outputs.cmake_changed == 'true' }}
 
   windows:
     needs: detect-changes

@@ -23,7 +23,6 @@ from utils import (
     download_file,
     extract_7z_archive,
     verify_7z_archive,
-    source_widows_msvc_env,
     update_env_path,
 )
 from make_python import get_python_interpreter_args
@@ -90,7 +89,7 @@ def prepare() -> None:
             version_search = re.search(r"version (\d+)\.(\d+)\.(\d+)", version_output)
             if version_search:
                 return version_search.groups()
-            print(f"ERROR: Could not extract clang --version")
+            print("ERROR: Could not extract clang --version")
             return None
 
         def get_clang_filename_suffix(version):
@@ -110,9 +109,7 @@ def prepare() -> None:
         clang_version = get_clang_version()
         if clang_version:
             clang_filename_suffix = get_clang_filename_suffix(clang_version)
-            fallback_clang_filename_suffix = get_fallback_clang_filename_suffix(
-                clang_version
-            )
+            fallback_clang_filename_suffix = get_fallback_clang_filename_suffix(clang_version)
 
     elif system == "Linux":
         clang_filename_suffix = "19.1.0-based-linux-Rhel8.8-gcc10.3-x86_64.7z"
@@ -132,17 +129,11 @@ def prepare() -> None:
         download_ok = download_file(download_url, libclang_zip)
         if not download_ok and fallback_clang_filename_suffix:
             fallback_download_url = LIBCLANG_URL_BASE + fallback_clang_filename_suffix
-            print(
-                f"WARNING: Could not download or version does not exist: {download_url}"
-            )
-            print(
-                f"WARNING: Attempting to fallback on known version: {fallback_download_url}..."
-            )
+            print(f"WARNING: Could not download or version does not exist: {download_url}")
+            print(f"WARNING: Attempting to fallback on known version: {fallback_download_url}...")
             download_ok = download_file(fallback_download_url, libclang_zip)
         if not download_ok:
-            print(
-                f"ERROR: Could not download or version does not exist: {download_url}"
-            )
+            print(f"ERROR: Could not download or version does not exist: {download_url}")
 
     # clean up previous failed extraction
     libclang_tmp = os.path.join(TEMP_DIR, "libclang-tmp")
@@ -169,22 +160,10 @@ def prepare() -> None:
     os.environ["LLVM_INSTALL_DIR"] = libclang_install_dir
     os.environ["CLANG_INSTALL_DIR"] = libclang_install_dir
 
-    # PySide6 build requires numpy 1.26.3
-    install_numpy_args = get_python_interpreter_args(PYTHON_OUTPUT_DIR, VARIANT) + [
-        "-m",
-        "pip",
-        "install",
-        "numpy==1.26.3",
-    ]
-    print(f"Installing numpy with {install_numpy_args}")
-    subprocess.run(install_numpy_args).check_returncode()
+    # Note: numpy is now installed via requirements.txt in python3.cmake before PySide6 builds.
 
-    cmakelist_path = os.path.join(
-        SOURCE_DIR, "sources", "shiboken6", "ApiExtractor", "CMakeLists.txt"
-    )
-    old_cmakelist_path = os.path.join(
-        SOURCE_DIR, "sources", "shiboken6", "ApiExtractor", "CMakeLists.txt.old"
-    )
+    cmakelist_path = os.path.join(SOURCE_DIR, "sources", "shiboken6", "ApiExtractor", "CMakeLists.txt")
+    old_cmakelist_path = os.path.join(SOURCE_DIR, "sources", "shiboken6", "ApiExtractor", "CMakeLists.txt.old")
     if os.path.exists(old_cmakelist_path):
         os.remove(old_cmakelist_path)
 
@@ -257,6 +236,17 @@ def build() -> None:
         pyside_build_args.append(f"--openssl={os.path.join(OPENSSL_OUTPUT_DIR, 'bin')}")
 
     if platform.system() == "Windows":
+        # Add Qt jom to the path to build in parallel
+        jom_path = os.path.abspath(os.path.join(QT_OUTPUT_DIR, "..", "..", "Tools", "QtCreator", "bin", "jom"))
+        if os.path.exists(os.path.join(jom_path, "jom.exe")):
+            print(f"jom.exe was successfully located at: {jom_path}")
+            update_env_path([jom_path])
+        elif shutil.which("jom"):
+            print("jom.exe found on PATH via shutil.which")
+        else:
+            print(f"Could not find jom.exe at the expected location: {jom_path}")
+            print("Build performance might be impacted")
+
         # Add the debug switch to match build type but only on Windows
         # (on other platforms, PySide6 is built in release)
         if VARIANT == "Debug":
@@ -295,9 +285,7 @@ def build() -> None:
     subprocess.run(generator_cleanup_args).check_returncode()
 
     if OPENSSL_OUTPUT_DIR and platform.system() == "Windows":
-        pyside_folder = glob.glob(
-            os.path.join(python_home, "**", "site-packages", "PySide6"), recursive=True
-        )[0]
+        pyside_folder = glob.glob(os.path.join(python_home, "**", "site-packages", "PySide6"), recursive=True)[0]
         openssl_libs = glob.glob(os.path.join(OPENSSL_OUTPUT_DIR, "bin", "lib*"))
 
         for lib in openssl_libs:
@@ -317,18 +305,14 @@ if __name__ == "__main__":
     parser.add_argument("--source-dir", dest="source", type=pathlib.Path, required=True)
     parser.add_argument("--python-dir", dest="python", type=pathlib.Path, required=True)
     parser.add_argument("--qt-dir", dest="qt", type=pathlib.Path, required=True)
-    parser.add_argument(
-        "--openssl-dir", dest="openssl", type=pathlib.Path, required=False
-    )
+    parser.add_argument("--openssl-dir", dest="openssl", type=pathlib.Path, required=False)
     parser.add_argument("--temp-dir", dest="temp", type=pathlib.Path, required=True)
     parser.add_argument("--output-dir", dest="output", type=pathlib.Path, required=True)
 
     parser.add_argument("--variant", dest="variant", type=str, required=True)
 
     # Major and minor version with dots.
-    parser.add_argument(
-        "--python-version", dest="python_version", type=str, required=True, default=""
-    )
+    parser.add_argument("--python-version", dest="python_version", type=str, required=True, default="")
 
     parser.set_defaults(prepare=False, build=False)
 

@@ -63,6 +63,45 @@ FUNCTION(rv_stage)
     MESSAGE(FATAL_ERROR "The 'TYPE' parameter was not specified.")
   ENDIF()
 
+  # Must precede the Linux rename block: dump_syms needs the real ELF, not the shell wrapper.
+  SET(_rv_stage_binary_types
+      SHARED_LIBRARY
+      MAIN_EXECUTABLE
+      EXECUTABLE
+      EXECUTABLE_WITH_PLUGINS
+      MU_PLUGIN
+      PYTHON_PLUGIN
+      IMAGE_FORMAT
+      MOVIE_FORMAT
+      OIIO_PLUGIN
+      OUTPUT_PLUGIN
+  )
+  IF(arg_TYPE IN_LIST _rv_stage_binary_types)
+    RV_GENERATE_SYMBOLS(TARGET ${arg_TARGET})
+
+    # Release builds compile with -g so dump_syms can extract Breakpad .sym files (see docs/crash-reporting.md section 7). On Linux the shipped artifact is the
+    # stage tree itself, so leaving the DWARF in the staged ELF would ship full debug info to customers. Strip it here -- AFTER RV_GENERATE_SYMBOLS has run
+    # dump_syms on the real ELF, and BEFORE the .bin rename below -- so the shipped binaries carry no DWARF while the symbols live only in the symbols_archive
+    # zip. --strip-debug keeps .symtab and, crucially, the GNU build-id that the .sym directory tree is keyed on, so offline symbolication still matches. This
+    # is gated on Release + Linux only (not on the Breakpad version, per contract C6): macOS Mach-O binaries do not embed DWARF (it stays in the dSYM, which
+    # rv_generate_symbols.cmake produces then deletes), so they are not bloated and need no strip.
+    #
+    # strip_debug_safe.sh (not a bare `strip`) guards against a GNU strip bug that corrupts binaries whose layout triggers the "'.dynstr' not in segment"
+    # warning: it strips to a temp copy and only replaces the original when strip is warning- and error-free, otherwise it leaves the binary unstripped. RV's
+    # own compiled targets strip cleanly; the guard protects any that do not.
+    IF(RV_TARGET_LINUX
+       AND CMAKE_BUILD_TYPE STREQUAL "Release"
+    )
+      ADD_CUSTOM_COMMAND(
+        TARGET ${arg_TARGET}
+        POST_BUILD
+        COMMENT "Stripping DWARF debug info from ${arg_TARGET} (symbols archived separately)"
+        COMMAND bash ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../scripts/strip_debug_safe.sh "$<TARGET_FILE:${arg_TARGET}>"
+        VERBATIM
+      )
+    ENDIF()
+  ENDIF()
+
   IF(RV_TARGET_LINUX)
     IF(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${arg_TARGET}.wrapper)
 
@@ -92,23 +131,76 @@ FUNCTION(rv_stage)
       IF(_native_target_type STREQUAL "EXECUTABLE"
          OR _native_target_type STREQUAL "SHARED_LIBRARY"
       )
+        # Batch all -change arguments into a single install_name_tool invocation per target. Multiple separate invocations each re-sign the binary, which can
+        # trigger macOS code signing lockouts ("Operation not permitted") on arm64.
+        SET(_change_args)
         FOREACH(
           dep
           ${RV_DEPS_LIST}
         )
           IF(TARGET ${dep})
+            # Resolve INTERFACE_LIBRARY targets to their underlying library target. Defensive: rv_find_dependency.cmake should already resolve these at
+            # insertion time, but handle any that slip through.
+            SET(_rvs_real_dep
+                ${dep}
+            )
+            GET_TARGET_PROPERTY(_rvs_dep_type ${dep} TYPE)
+            IF(_rvs_dep_type STREQUAL "INTERFACE_LIBRARY")
+              GET_TARGET_PROPERTY(_rvs_iface_libs ${dep} INTERFACE_LINK_LIBRARIES)
+              IF(_rvs_iface_libs)
+                RV_EXTRACT_LINK_TARGETS("${_rvs_iface_libs}" _rvs_resolved_deps)
+                FOREACH(
+                  _rvs_rdep
+                  ${_rvs_resolved_deps}
+                )
+                  GET_TARGET_PROPERTY(_rvs_rdep_type ${_rvs_rdep} TYPE)
+                  IF(NOT _rvs_rdep_type STREQUAL "INTERFACE_LIBRARY")
+                    SET(_rvs_real_dep
+                        ${_rvs_rdep}
+                    )
+                    BREAK()
+                  ENDIF()
+                ENDFOREACH()
+              ENDIF()
+              IF("${_rvs_real_dep}" STREQUAL "${dep}")
+                CONTINUE()
+              ENDIF()
+            ENDIF()
+
+            # Use RV_RESOLVE_IMPORTED_LOCATION instead of raw PROPERTY LOCATION to handle config-specific variants correctly.
+            RV_RESOLVE_IMPORTED_LOCATION(${_rvs_real_dep} dep_file_path)
+            IF(NOT dep_file_path)
+              CONTINUE()
+            ENDIF()
+
+            # For found packages (e.g. Homebrew), the install name recorded by the linker may differ from the target's LOCATION (different symlink paths). Use
+            # the cached install name from RV_RESOLVE_DARWIN_INSTALL_NAME if available; this is a no-op for built-from-source deps where the library doesn't
+            # exist at configure time.
             GET_PROPERTY(
-              dep_file_path
-              TARGET ${dep}
-              PROPERTY LOCATION
+              _dep_install_name
+              TARGET ${_rvs_real_dep}
+              PROPERTY RV_DARWIN_INSTALL_NAME
             )
-            GET_FILENAME_COMPONENT(dep_file_name ${dep_file_path} NAME)
-            ADD_CUSTOM_COMMAND(
-              COMMENT "Fixing ${dep_file_name}'s rpath in ${arg_TARGET}" TARGET ${arg_TARGET} POST_BUILD
-              COMMAND ${CMAKE_INSTALL_NAME_TOOL} -change "${dep_file_path}" "@rpath/${dep_file_name}" "$<TARGET_FILE:${arg_TARGET}>"
-            )
+            IF(_dep_install_name)
+              SET(dep_change_path
+                  "${_dep_install_name}"
+              )
+              GET_FILENAME_COMPONENT(dep_file_name "${_dep_install_name}" NAME)
+            ELSE()
+              SET(dep_change_path
+                  "${dep_file_path}"
+              )
+              GET_FILENAME_COMPONENT(dep_file_name "${dep_file_path}" NAME)
+            ENDIF()
+            LIST(APPEND _change_args -change "${dep_change_path}" "@rpath/${dep_file_name}")
           ENDIF()
         ENDFOREACH()
+        IF(_change_args)
+          ADD_CUSTOM_COMMAND(
+            COMMENT "Fixing dependency rpaths in ${arg_TARGET}" TARGET ${arg_TARGET} POST_BUILD
+            COMMAND ${CMAKE_INSTALL_NAME_TOOL} ${_change_args} "$<TARGET_FILE:${arg_TARGET}>"
+          )
+        ENDIF()
       ENDIF()
     ENDIF()
   ENDIF()
@@ -351,6 +443,7 @@ FUNCTION(rv_stage)
     ENDIF()
 
     ADD_DEPENDENCIES(mu_plugins ${arg_TARGET})
+    ADD_DEPENDENCIES(${arg_TARGET} dependencies)
 
     ADD_SHARED_LIBRARY_LIST(${arg_TARGET})
 
@@ -385,6 +478,7 @@ FUNCTION(rv_stage)
     ENDIF()
 
     ADD_DEPENDENCIES(python_plugins ${arg_TARGET})
+    ADD_DEPENDENCIES(${arg_TARGET} dependencies)
 
     ADD_SHARED_LIBRARY_LIST(${arg_TARGET})
 
@@ -416,16 +510,12 @@ FUNCTION(rv_stage)
 
       SET_DIRECTORY_PROPERTIES(PROPERTIES CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_package_file})
 
-      EXECUTE_PROCESS(
-        COMMAND bash -c "cat ${_package_file} | grep version: | grep --only-matching -e '[0-9.]*'"
-        RESULT_VARIABLE _result
-        OUTPUT_VARIABLE _pkg_version
-        OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      FILE(READ "${CMAKE_CURRENT_SOURCE_DIR}/${_package_file}" _package_file_content)
+      STRING(REGEX MATCH "version:[ \t]*([0-9.]+)" _version_match "${_package_file_content}")
+      SET(_pkg_version
+          "${CMAKE_MATCH_1}"
       )
-      IF(_result
-         AND NOT _result EQUAL 0
-      )
+      IF(NOT _pkg_version)
         MESSAGE(FATAL_ERROR "Error retrieving version field from '${_package_file}'")
       ELSE()
         MESSAGE(DEBUG "Found version for '${arg_TARGET}.rvpkg' package version ${_pkg_version} ...")
@@ -505,6 +595,7 @@ FUNCTION(rv_stage)
     ENDIF()
 
     ADD_DEPENDENCIES(image_formats ${arg_TARGET})
+    ADD_DEPENDENCIES(${arg_TARGET} dependencies)
 
     ADD_SHARED_LIBRARY_LIST(${arg_TARGET})
 
@@ -534,6 +625,7 @@ FUNCTION(rv_stage)
     ENDIF()
 
     ADD_DEPENDENCIES(movie_formats ${arg_TARGET})
+    ADD_DEPENDENCIES(${arg_TARGET} dependencies)
 
     ADD_SHARED_LIBRARY_LIST(${arg_TARGET})
 
@@ -564,6 +656,7 @@ FUNCTION(rv_stage)
     ENDIF()
 
     ADD_DEPENDENCIES(oiio_plugins ${arg_TARGET})
+    ADD_DEPENDENCIES(${arg_TARGET} dependencies)
 
     ADD_SHARED_LIBRARY_LIST(${arg_TARGET})
 
@@ -593,6 +686,7 @@ FUNCTION(rv_stage)
     ENDIF()
 
     ADD_DEPENDENCIES(output_plugins ${arg_TARGET})
+    ADD_DEPENDENCIES(${arg_TARGET} dependencies)
 
     ADD_SHARED_LIBRARY_LIST(${arg_TARGET})
 

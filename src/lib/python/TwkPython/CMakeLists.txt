@@ -19,7 +19,6 @@ ADD_LIBRARY(
   ${_sources}
 )
 
-
 TARGET_LINK_LIBRARIES(
   ${_target}
   PUBLIC Python::Python
@@ -29,5 +28,7 @@ TARGET_INCLUDE_DIRECTORIES(
   ${_target}
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+ADD_DEPENDENCIES(${_target} RV_DEPS_PYTHON3)
 
 RV_STAGE(TYPE "LIBRARY" TARGET ${_target})

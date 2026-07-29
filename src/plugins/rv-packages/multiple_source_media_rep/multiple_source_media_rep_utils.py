@@ -120,13 +120,7 @@ def get_extension_from_info_file(info_file):
     """
     Returns the extension from the infos["file"] media info
     """
-    return (
-        ""
-        if not info_file
-        else "URL"
-        if is_url(info_file)
-        else info_file.split(".")[-1].upper()
-    )
+    return "" if not info_file else "URL" if is_url(info_file) else info_file.split(".")[-1].upper()
 
 
 def get_common_source_media_infos(sources):
@@ -145,9 +139,14 @@ def get_common_source_media_infos(sources):
         for i in range(1, len(sources)):
             new_infos = get_source_media_info(sources[i])
             new_width = new_infos.get("width")
+            new_height = new_infos.get("height")
+
+            # Skip gaps
+            if new_width == 1 and new_height == 1:
+                continue
+
             if new_width != info_width:
                 info_width = ""
-            new_height = new_infos.get("height")
             if new_height != info_height:
                 info_height = ""
             new_extension = get_extension_from_info_file(new_infos.get("file"))

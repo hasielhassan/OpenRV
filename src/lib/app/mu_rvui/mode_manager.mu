@@ -213,13 +213,25 @@ class: ModeManagerMode : MinorMode
     {
         \: (int; )
         {
-            if (filterLiveReviewEvents())
-                then DisabledMenuState
-                else if entry.mode eq nil
-                     then UncheckedMenuState
-                     else if entry.mode._active
-                            then CheckedMenuState
-                            else UncheckedMenuState;
+            // Special handling of mode toggling if certain categories of actions are disabled.
+            // Note: We only return the disabled state here. The "category-event-blocked" event
+            // is sent by toggleModeEntry() when the user actually tries to invoke the action,
+            // not when just checking if the menu item should be disabled.
+            if (!commands.isEventCategoryEnabled("annotate_category") && entry.name == "annotate_mode")
+            {
+                return DisabledMenuState;
+            }
+    
+            if (!commands.isEventCategoryEnabled("sessionmanager_category") && entry.name == "session_manager")
+            {
+                return DisabledMenuState;
+            }
+    
+            if entry.mode eq nil
+                 then UncheckedMenuState
+                 else if entry.mode._active
+                        then CheckedMenuState
+                        else UncheckedMenuState;
         };
     }
 
@@ -426,11 +438,19 @@ class: ModeManagerMode : MinorMode
 
     \: toggleModeEntry (void; Event event, ModeEntry entry, ModeManagerMode mm)
     {
-        if (filterLiveReviewEvents() && (entry.name == "session_manager" || entry.name == "annotate_mode"))
+        // Special handling of mode toggling if certain categories of actions are disabled.
+        if (!commands.isEventCategoryEnabled("annotate_category") && entry.name == "annotate_mode")
         {
-            sendInternalEvent("live-review-blocked-event");
+            sendInternalEvent("category-event-blocked", "annotate_category");
             return;
         }
+
+        if (!commands.isEventCategoryEnabled("sessionmanager_category") && entry.name == "session_manager")
+        {
+            sendInternalEvent("category-event-blocked", "sessionmanager_category");
+            return;
+        }
+            
         mm.toggleEntry(entry);
     }
 
@@ -515,6 +535,7 @@ class: ModeManagerMode : MinorMode
 
         if (ext == "rvpkg")
         {
+            let error = false;
             try
             {
                 let vparts = name.split("-")[1].split(".");
@@ -523,6 +544,10 @@ class: ModeManagerMode : MinorMode
             }
             catch (...)
             {
+                error = true;
+            }
+
+            if (error) {
                 print("ERROR: bad rvpkg package name \"%s\" expecting name-X.X.rvpkg\n" % name);
                 return nil;
             }
@@ -754,6 +779,11 @@ class: ModeManagerMode : MinorMode
         _otherLoads  = commandLineFlag("ModeManagerLoad", "").split(",");
         _rejectLoads = commandLineFlag("ModeManagerReject", "").split(",");
 
+        // "zzzzzz" is the sortKey and 100 is the ordering (ordering takes priority over sortKey)
+        // Their current value is chosen because we want this mode to run last
+        // as it deactivates all other modes. Therefore, when creating a new mode,
+        // make sure that its ordering and/or sortKey is lower than mode_manager so your
+        // before-session-deletion (and similar) handlers run before deactivateAll tears modes down.
         init("ModeManager",
              nil,
              [("state-initialized", load, "Load installed modes"),
@@ -762,7 +792,8 @@ class: ModeManagerMode : MinorMode
               ("before-graph-view-change", viewChange(,false), "Deactivate mode when view changes"),
               ("after-graph-view-change", viewChange(,true), "Activate mode when view changes")],
              nil,
-             "zzzzzz");
+             "zzzzzz",
+             100);
 
         try
         {

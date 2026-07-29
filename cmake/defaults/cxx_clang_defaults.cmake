@@ -14,23 +14,23 @@ ELSE()
 ENDIF()
 
 IF(NOT RV_TARGET_APPLE_ARM64)
-  SET(__compiler_options_x86_64 -msse -msse2 -msse3 -mmmx)
+  SET(__compiler_options_x86_64
+      -msse -msse2 -msse3 -mmmx
+  )
 ENDIF()
 
 SET(__compiler_options__
-  -Wall ${__compiler_options_x86_64}
+    -Wall ${__compiler_options_x86_64}
 )
 
 # Common options
-ADD_COMPILE_OPTIONS(
-  ${_verbose_invocation}
-  ${_compiler_options__}
-  -Wnonportable-include-path
-)
+ADD_COMPILE_OPTIONS(${_verbose_invocation} ${_compiler_options__} -Wnonportable-include-path)
 
 IF(${CMAKE_BUILD_TYPE} STREQUAL "Release")
   # Release build specific options
-  ADD_COMPILE_OPTIONS(-DNDEBUG -O3 # Maximum optimization
+  ADD_COMPILE_OPTIONS(
+    -DNDEBUG -O3 # Maximum optimization
+    -g # Debug info for crash dump symbolication (dsymutil reads it; does not affect runtime performance)
   )
 ELSEIF(${CMAKE_BUILD_TYPE} STREQUAL "Debug")
   # Debug build specific options

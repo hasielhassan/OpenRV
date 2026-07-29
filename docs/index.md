@@ -3,10 +3,16 @@
 ```{toctree}
 :maxdepth: 2
 :hidden:
-:caption: Building Open RV
+:caption: Platforms setup
 build_system/config_linux_rocky89
 build_system/config_macos
 build_system/config_windows
+```
+
+```{toctree}
+:maxdepth: 2
+:hidden:
+:caption: Building OpenRV
 build_system/config_common_build
 build_system/build_errors
 ```
@@ -77,6 +83,7 @@ rv-manuals/rv-gto
 rv-manuals/rv-luts
 rv-manuals/rv-media-multi-representation
 rv-manuals/rv-mu-programming
+rv-manuals/rv-crash-reporting
 ```
 
 ```{toctree}

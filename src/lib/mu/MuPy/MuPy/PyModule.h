@@ -36,14 +36,11 @@ namespace Mu
         //  NOTE: any of these can be 0 if no function is needed
         //
 
-        static void addConverterFunctions(MuToPyObjectConverter,
-                                          PyObjectToMuConverter,
-                                          MuOpaqueToPyObjectConverter,
+        static void addConverterFunctions(MuToPyObjectConverter, PyObjectToMuConverter, MuOpaqueToPyObjectConverter,
                                           PyObjectToMuOpaqueConverter);
 
         static Value py2mu(MuLangContext*, Process*, const Type*, PyObject*);
-        static PyObject* mu2py(MuLangContext*, Process*, const Type*,
-                               const Value&);
+        static PyObject* mu2py(MuLangContext*, Process*, const Type*, const Value&);
 
         static NODE_DECLARATION(nPy_DECREF, void);
         static NODE_DECLARATION(nPy_INCREF, void);
@@ -57,6 +54,7 @@ namespace Mu
         static NODE_DECLARATION(nPyTuple_GetItem, Pointer);
         static NODE_DECLARATION(nPyString_Check, bool);
         static NODE_DECLARATION(nPyFunction_Check, bool);
+        static NODE_DECLARATION(nPyObject_Str, Pointer);
         static NODE_DECLARATION(nPyImport_Import, Pointer);
         static NODE_DECLARATION(nPy_TYPE, Pointer);
         static NODE_DECLARATION(nPyModule_GetName, Pointer);

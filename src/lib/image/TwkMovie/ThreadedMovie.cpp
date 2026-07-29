@@ -19,9 +19,8 @@ namespace TwkMovie
         mov->threadMain();
     }
 
-    ThreadedMovie::ThreadedMovie(const Movies& movies, const Frames& frames,
-                                 size_t stackMultiplier, ThreadAPI* api,
-                                 InitializeFunc F)
+    ThreadedMovie::ThreadedMovie(const Movies& movies, const Frames& frames, size_t stackMultiplier, ThreadAPI* api, InitializeFunc F,
+                                 FinalizeFunc finalizeFunction)
         : m_movies(movies)
         , m_threadGroup(movies.size(), stackMultiplier, api)
         , m_frames(frames)
@@ -29,6 +28,7 @@ namespace TwkMovie
         , m_currentIndex(0)
         , m_requestIndex(0)
         , m_initialize(F)
+        , m_finalize(finalizeFunction)
     {
         // if (!m_movie->isThreadSafe()) throw runtime_exception();
         m_info = movies.front()->info();
@@ -190,7 +190,15 @@ namespace TwkMovie
 
         m_threadGroup.lock(m_runLock);
         td->running = false;
+
+        bool allFramesDone = (m_currentIndex >= m_frames.size());
+
         m_threadGroup.unlock(m_runLock);
+
+        if (allFramesDone && m_finalize != nullptr)
+        {
+            m_finalize();
+        }
 
         // cout << "thread " << td->id << " no longer running" << endl;
     }
@@ -217,8 +225,7 @@ namespace TwkMovie
         }
     }
 
-    void ThreadedMovie::imagesAtFrame(const ReadRequest& request,
-                                      FrameBufferVector& fbs)
+    void ThreadedMovie::imagesAtFrame(const ReadRequest& request, FrameBufferVector& fbs)
     {
         const size_t threads = m_threadGroup.num_threads();
 
@@ -301,22 +308,17 @@ namespace TwkMovie
         unlock();
     }
 
-    void ThreadedMovie::identifiersAtFrame(const ReadRequest& request,
-                                           IdentifierVector& ids)
+    void ThreadedMovie::identifiersAtFrame(const ReadRequest& request, IdentifierVector& ids)
     {
         m_threadData.front().movie->identifiersAtFrame(request, ids);
     }
 
-    size_t ThreadedMovie::audioFillBuffer(const AudioReadRequest& request,
-                                          AudioBuffer& buffer)
+    size_t ThreadedMovie::audioFillBuffer(const AudioReadRequest& request, AudioBuffer& buffer)
     {
         return m_threadData.front().movie->audioFillBuffer(request, buffer);
     }
 
-    void ThreadedMovie::audioConfigure(unsigned int channels,
-                                       TwkAudio::Time rate, size_t bufferSize)
-    {
-    }
+    void ThreadedMovie::audioConfigure(unsigned int channels, TwkAudio::Time rate, size_t bufferSize) {}
 
     void ThreadedMovie::flush() {}
 

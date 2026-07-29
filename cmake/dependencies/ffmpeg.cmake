@@ -16,33 +16,17 @@
 # cmake-format: on
 # ------------------------------------------------------------------------------
 
-INCLUDE(ProcessorCount) # require CMake 3.15+
-PROCESSORCOUNT(_cpu_count)
-
 SET(_target
     "RV_DEPS_FFMPEG"
 )
 
-IF(RV_FFMPEG_7)
-  SET(_version
-      "n7.1"
-  )
+SET(_version
+    ${RV_DEPS_FFMPEG_VERSION}
+)
 
-  SET(_download_hash
-      "a7a85ec05c9bc3aeefee12743899d8ab"
-  )
-ELSEIF(RV_FFMPEG_6)
-  SET(_version
-      "n6.1.2"
-  )
-
-  SET(_download_hash
-      "953b858e5be3ab66232bdbb90e42f50d"
-  )
-ELSE()
-  # This shouldn't happen, but it could if there are changes the acceptable versions of FFmpeg in ffmpeg.cmake and this section is not updated accordingly.
-  MESSAGE(FATAL_ERROR "The requested version of FFmpeg is not supported.")
-ENDIF()
+SET(_download_hash
+    ${RV_DEPS_FFMPEG_DOWNLOAD_HASH}
+)
 
 SET(_download_url
     "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${_version}.zip"
@@ -79,109 +63,54 @@ ELSE()
   )
 ENDIF()
 
-IF(RV_FFMPEG_7)
-  IF(RV_TARGET_DARWIN)
-    SET(_ffmpeg_avutil_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avutil.59${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_swresample_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swresample.5${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_swscale_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swscale.8${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_avcodec_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec.61${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_avformat_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avformat.61${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-  ELSEIF(RV_TARGET_LINUX)
-    SET(_ffmpeg_avutil_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avutil${CMAKE_SHARED_LIBRARY_SUFFIX}.59
-    )
-    SET(_ffmpeg_swresample_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swresample${CMAKE_SHARED_LIBRARY_SUFFIX}.5
-    )
-    SET(_ffmpeg_swscale_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swscale${CMAKE_SHARED_LIBRARY_SUFFIX}.8
-    )
-    SET(_ffmpeg_avcodec_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec${CMAKE_SHARED_LIBRARY_SUFFIX}.61
-    )
-    SET(_ffmpeg_avformat_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avformat${CMAKE_SHARED_LIBRARY_SUFFIX}.61
-    )
-  ELSEIF(RV_TARGET_WINDOWS)
-    SET(_ffmpeg_avutil_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avutil-59${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_swresample_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swresample-5${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_swscale_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swscale-8${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_avcodec_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec-61${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_avformat_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avformat-61${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-  ENDIF()
-ELSEIF(RV_FFMPEG_6)
-  IF(RV_TARGET_DARWIN)
-    SET(_ffmpeg_avutil_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avutil.58${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_swresample_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swresample.4${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_swscale_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swscale.7${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_avcodec_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec.60${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_avformat_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avformat.60${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-  ELSEIF(RV_TARGET_LINUX)
-    SET(_ffmpeg_avutil_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avutil${CMAKE_SHARED_LIBRARY_SUFFIX}.58
-    )
-    SET(_ffmpeg_swresample_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swresample${CMAKE_SHARED_LIBRARY_SUFFIX}.4
-    )
-    SET(_ffmpeg_swscale_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swscale${CMAKE_SHARED_LIBRARY_SUFFIX}.7
-    )
-    SET(_ffmpeg_avcodec_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec${CMAKE_SHARED_LIBRARY_SUFFIX}.60
-    )
-    SET(_ffmpeg_avformat_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avformat${CMAKE_SHARED_LIBRARY_SUFFIX}.60
-    )
-  ELSEIF(RV_TARGET_WINDOWS)
-    SET(_ffmpeg_avutil_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avutil-58${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_swresample_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swresample-4${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_swscale_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}swscale-7${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_avcodec_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec-60${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-    SET(_ffmpeg_avformat_lib_name
-        ${CMAKE_SHARED_LIBRARY_PREFIX}avformat-60${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-  ENDIF()
-ELSE()
-  # This shouldn't happen. But it could if there are changes the acceptable versions of FFmpeg in ffmpeg.cmake and this section is not updated accordingly.
-  MESSAGE(FATAL_ERROR "The requested version of FFmpeg is not supported.")
+IF(RV_TARGET_DARWIN)
+  SET(_ffmpeg_avutil_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avutil.${RV_DEPS_FFMPEG_VERSION_LIB_avutil}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+  SET(_ffmpeg_swresample_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}swresample.${RV_DEPS_FFMPEG_VERSION_LIB_swresample}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+  SET(_ffmpeg_swscale_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}swscale.${RV_DEPS_FFMPEG_VERSION_LIB_swscale}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+  SET(_ffmpeg_avcodec_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec.${RV_DEPS_FFMPEG_VERSION_LIB_avcodec}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+  SET(_ffmpeg_avformat_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avformat.${RV_DEPS_FFMPEG_VERSION_LIB_avformat}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+ELSEIF(RV_TARGET_LINUX)
+  SET(_ffmpeg_avutil_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avutil${CMAKE_SHARED_LIBRARY_SUFFIX}.${RV_DEPS_FFMPEG_VERSION_LIB_avutil}
+  )
+  SET(_ffmpeg_swresample_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}swresample${CMAKE_SHARED_LIBRARY_SUFFIX}.${RV_DEPS_FFMPEG_VERSION_LIB_swresample}
+  )
+  SET(_ffmpeg_swscale_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}swscale${CMAKE_SHARED_LIBRARY_SUFFIX}.${RV_DEPS_FFMPEG_VERSION_LIB_swscale}
+  )
+  SET(_ffmpeg_avcodec_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec${CMAKE_SHARED_LIBRARY_SUFFIX}.${RV_DEPS_FFMPEG_VERSION_LIB_avcodec}
+  )
+  SET(_ffmpeg_avformat_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avformat${CMAKE_SHARED_LIBRARY_SUFFIX}.${RV_DEPS_FFMPEG_VERSION_LIB_avformat}
+  )
+ELSEIF(RV_TARGET_WINDOWS)
+  SET(_ffmpeg_avutil_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avutil-${RV_DEPS_FFMPEG_VERSION_LIB_avutil}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+  SET(_ffmpeg_swresample_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}swresample-${RV_DEPS_FFMPEG_VERSION_LIB_swresample}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+  SET(_ffmpeg_swscale_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}swscale-${RV_DEPS_FFMPEG_VERSION_LIB_swscale}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+  SET(_ffmpeg_avcodec_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avcodec-${RV_DEPS_FFMPEG_VERSION_LIB_avcodec}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
+  SET(_ffmpeg_avformat_lib_name
+      ${CMAKE_SHARED_LIBRARY_PREFIX}avformat-${RV_DEPS_FFMPEG_VERSION_LIB_avformat}${CMAKE_SHARED_LIBRARY_SUFFIX}
+  )
 ENDIF()
 
 SET(_ffmpeg_libs
@@ -247,6 +176,16 @@ IF(RV_TARGET_WINDOWS)
   LIST(APPEND RV_FFMPEG_COMMON_CONFIG_OPTIONS "--toolchain=msvc")
 ENDIF()
 
+# Disable x11 on macOS to avoid linking against Homebrew's X11 libraries, ensuring binary portability
+IF(RV_TARGET_DARWIN)
+  LIST(APPEND RV_FFMPEG_COMMON_CONFIG_OPTIONS "--disable-xlib")
+  LIST(APPEND RV_FFMPEG_COMMON_CONFIG_OPTIONS "--disable-libxcb")
+  LIST(APPEND RV_FFMPEG_COMMON_CONFIG_OPTIONS "--disable-libxcb-shm")
+  LIST(APPEND RV_FFMPEG_COMMON_CONFIG_OPTIONS "--disable-libxcb-shape")
+  LIST(APPEND RV_FFMPEG_COMMON_CONFIG_OPTIONS "--disable-libxcb-xfixes")
+  # For older FFmpeg versions, you might also need: LIST(APPEND RV_FFMPEG_COMMON_CONFIG_OPTIONS "--disable-x11grab")
+ENDIF()
+
 # Change the condition to TRUE to be able to debug into FFmpeg.
 IF(FALSE)
   LIST(APPEND RV_FFMPEG_COMMON_CONFIG_OPTIONS "--disable-optimizations")
@@ -294,6 +233,24 @@ IF(NOT RV_FFMPEG_CONFIG_OPTIONS)
       "vp9_rkmpp"
       "vp9_v4l2m2m"
   )
+
+  # FFmpeg 8 introduced the prores_raw decoder, which (like the prores decoder) pulls in libavcodec/x86/proresdsp_init.o. That C init references the SSE2 asm
+  # symbol ff_prores_idct_put_10_sse2, but the asm that defines it (x86/proresdsp.o) is only built when CONFIG_PRORES_DECODER is enabled. Because we disable the
+  # non-free prores decoder above, leaving prores_raw enabled produces an undefined symbol in libavcodec on x86 (mio_ffmpeg fails to dlopen). Disable prores_raw
+  # too for consistency with our non-free ProRes policy. Guarded on RV_FFMPEG_8 since the decoder does not exist in FFmpeg 6/7 and --disable-decoder on an
+  # unknown decoder makes FFmpeg's configure fail.
+  IF(RV_FFMPEG_8)
+    LIST(APPEND NON_FREE_DECODERS_TO_DISABLE "prores_raw")
+
+    # We disable the non-free ac3 decoder above, which (via eac3_decoder_select="ac3_decoder") also disables the eac3 decoder, so CONFIG_EAC3_DECODER=0. But the
+    # ac3_fixed decoder is left enabled, so libavcodec/ac3dec_fixed.c (which #includes ac3dec.c) is still compiled. With eac3 disabled, eac3dec.c -- which
+    # defines the static ff_eac3_parse_header -- is never included into that TU, yet ac3dec.c still names the symbol in its `if (CONFIG_EAC3_DECODER)` branch.
+    # GCC/Clang dead-code-eliminate the dead branch and only warn, but MSVC treats the referenced-but-undefined static as a fatal error C2129, breaking the
+    # FFmpeg 8 build on Windows. ac3_fixed is the same non-free AC3 codec, so disable it (and eac3 explicitly) to drop the offending TU. Guarded on RV_FFMPEG_8
+    # to keep the existing FFmpeg 6/7 builds unchanged.
+    LIST(APPEND NON_FREE_DECODERS_TO_DISABLE "ac3_fixed")
+    LIST(APPEND NON_FREE_DECODERS_TO_DISABLE "eac3")
+  ENDIF()
 
   FOREACH(
     NON_FREE_DECODER_TO_DISABLE
@@ -356,31 +313,41 @@ LIST(REMOVE_DUPLICATES RV_FFMPEG_EXTRA_C_OPTIONS)
 LIST(REMOVE_DUPLICATES RV_FFMPEG_EXTRA_LIBPATH_OPTIONS)
 LIST(REMOVE_DUPLICATES RV_FFMPEG_EXTERNAL_LIBS)
 
-SET(_ffmpeg_preprocess_pkg_config_path
-    $ENV{PKG_CONFIG_PATH}
-)
-LIST(APPEND _ffmpeg_preprocess_pkg_config_path "${RV_DEPS_DAVID_LIB_DIR}/pkgconfig")
-IF(RV_TARGET_WINDOWS)
+# On macOS, externally-provided shared libraries may use @rpath install names. FFmpeg's configure compiles and RUNS small test binaries linked against these
+# libs; without an LC_RPATH in the test binary, dyld can't locate them at runtime (SIGABRT / Abort trap: 6). DYLD_LIBRARY_PATH cannot be used because macOS dyld
+# strips it for hardened binaries like /bin/sh before the configure script ever runs. For every -L<dir> flag we add a matching -Wl,-rpath,<dir> so that test
+# binaries can find shared libraries at runtime. The embedded rpaths are harmless: RV_STAGE_DEPENDENCY_LIBS rewrites all install names to @rpath/<basename> via
+# install_name_tool, so external package paths never reach the final staged build.
+IF(RV_TARGET_DARWIN)
+  SET(_ffmpeg_rpath_options)
   FOREACH(
-    _ffmpeg_pkg_config_path_element IN
-    LISTS _ffmpeg_preprocess_pkg_config_path
+    _opt IN
+    LISTS RV_FFMPEG_EXTRA_LIBPATH_OPTIONS
   )
-    # Changing path start from "c:/..." to "/c/..." and replacing all backslashes with slashes since PkgConfig wants a linux path
-    STRING(REPLACE "\\" "/" _ffmpeg_pkg_config_path_element "${_ffmpeg_pkg_config_path_element}")
-    STRING(REPLACE ":" "" _ffmpeg_pkg_config_path_element "${_ffmpeg_pkg_config_path_element}")
-    STRING(FIND ${_ffmpeg_pkg_config_path_element} / _ffmpeg_first_slash_index)
-    IF(_ffmpeg_first_slash_index GREATER 0)
-      STRING(PREPEND _ffmpeg_pkg_config_path_element "/")
+    STRING(REGEX MATCH "^--extra-ldflags=-L(.+)$" _match "${_opt}")
+    IF(CMAKE_MATCH_1)
+      LIST(APPEND _ffmpeg_rpath_options "--extra-ldflags=-Wl,-rpath,${CMAKE_MATCH_1}")
     ENDIF()
-    LIST(APPEND _ffmpeg_pkg_config_path ${_ffmpeg_pkg_config_path_element})
   ENDFOREACH()
-ELSE()
-  SET(_ffmpeg_pkg_config_path
-      ${_ffmpeg_preprocess_pkg_config_path}
-  )
+  IF(_ffmpeg_rpath_options)
+    LIST(APPEND RV_FFMPEG_EXTRA_LIBPATH_OPTIONS ${_ffmpeg_rpath_options})
+    LIST(REMOVE_DUPLICATES RV_FFMPEG_EXTRA_LIBPATH_OPTIONS)
+  ENDIF()
 ENDIF()
-LIST(JOIN _ffmpeg_pkg_config_path ":" _ffmpeg_pkg_config_path)
 
+# Include the Conan generators folder when available: PkgConfigDeps.generate() writes dav1d.pc and other Conan-provided .pc files there. Without this,
+# pkg-config cannot find dav1d when the Conan binary package lacks a lib/pkgconfig/ subdirectory.
+SET(_ffmpeg_extra_pkgconfig_dirs
+    "${RV_DEPS_DAV1D_LIB_DIR}/pkgconfig"
+)
+IF(RV_CONAN_CMAKE_PREFIX_PATH)
+  LIST(APPEND _ffmpeg_extra_pkgconfig_dirs "${RV_CONAN_CMAKE_PREFIX_PATH}")
+ENDIF()
+RV_BUILD_PKG_CONFIG_PATH(_ffmpeg_pkg_config_path EXTRA_DIRS ${_ffmpeg_extra_pkgconfig_dirs})
+
+# PKG_CONFIG_PATH is explicitly cleared (set to empty) in the configure environment below. pkg-config searches PKG_CONFIG_PATH *before* PKG_CONFIG_LIBDIR; if
+# the inherited env has MSYS2 MinGW paths (e.g. from Conan's msys2 package), their openssl.pc / zlib.pc shadow the Conan generators .pc files and return
+# MinGW-targeted flags incompatible with MSVC.
 SEPARATE_ARGUMENTS(RV_FFMPEG_PATCH_COMMAND_STEP)
 
 EXTERNALPROJECT_ADD(
@@ -395,8 +362,8 @@ EXTERNALPROJECT_ADD(
   SOURCE_DIR ${RV_DEPS_BASE_DIR}/${_target}/src
   PATCH_COMMAND ${RV_FFMPEG_PATCH_COMMAND_STEP}
   CONFIGURE_COMMAND
-    ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${_ffmpeg_pkg_config_path}" ${_configure_command} --prefix=${_install_dir} ${RV_FFMPEG_COMMON_CONFIG_OPTIONS}
-    ${RV_FFMPEG_CONFIG_OPTIONS} ${RV_FFMPEG_EXTRA_C_OPTIONS} ${RV_FFMPEG_EXTRA_LIBPATH_OPTIONS} ${RV_FFMPEG_EXTERNAL_LIBS}
+    ${CMAKE_COMMAND} -E env "PKG_CONFIG_LIBDIR=${_ffmpeg_pkg_config_path}" "PKG_CONFIG_PATH=" ${_configure_command} --prefix=${_install_dir}
+    ${RV_FFMPEG_COMMON_CONFIG_OPTIONS} ${RV_FFMPEG_CONFIG_OPTIONS} ${RV_FFMPEG_EXTRA_C_OPTIONS} ${RV_FFMPEG_EXTRA_LIBPATH_OPTIONS} ${RV_FFMPEG_EXTERNAL_LIBS}
   BUILD_COMMAND ${_make_command} -j${_cpu_count}
   INSTALL_COMMAND ${_make_command} install
   BUILD_IN_SOURCE TRUE
@@ -462,10 +429,6 @@ TARGET_LINK_LIBRARIES(
   INTERFACE ffmpeg::avcodec
 )
 
-SET(${_target}-stage-flag
-    ${RV_STAGE_LIB_DIR}/${_target}-stage-flag
-)
-
 ADD_CUSTOM_TARGET(
   clean-${_target}
   COMMENT "Cleaning '${_target}' ..."
@@ -473,34 +436,15 @@ ADD_CUSTOM_TARGET(
   COMMAND ${CMAKE_COMMAND} -E remove_directory ${RV_DEPS_BASE_DIR}/cmake/dependencies/${_target}-prefix
 )
 
-IF(RV_TARGET_WINDOWS)
-  ADD_CUSTOM_COMMAND(
-    TARGET ${_target}
-    POST_BUILD
-    COMMENT "Installing ${_target}'s libs and bin into ${RV_STAGE_LIB_DIR} and ${RV_STAGE_BIN_DIR}"
-    # Note: The FFmpeg build stores both the import lib and the dll in the install bin directory
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_install_dir}/bin ${RV_STAGE_LIB_DIR}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_install_dir}/bin ${RV_STAGE_BIN_DIR}
-    COMMAND cmake -E touch ${${_target}-stage-flag}
-    BYPRODUCTS ${${_target}-stage-flag}
-  )
-ELSE()
-  ADD_CUSTOM_COMMAND(
-    TARGET ${_target}
-    POST_BUILD
-    COMMENT "Installing ${_target}'s libs into ${RV_STAGE_LIB_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${_lib_dir} ${RV_STAGE_LIB_DIR}
-    COMMAND cmake -E touch ${${_target}-stage-flag}
-    BYPRODUCTS ${${_target}-stage-flag}
-  )
-ENDIF()
-
-ADD_CUSTOM_TARGET(
-  ${_target}-stage-target ALL
-  DEPENDS ${${_target}-stage-flag}
+SET(_ffmpeg_targets)
+FOREACH(
+  _ffmpeg_lib
+  ${_ffmpeg_libs}
 )
+  LIST(APPEND _ffmpeg_targets ffmpeg::${_ffmpeg_lib})
+ENDFOREACH()
 
-ADD_DEPENDENCIES(dependencies ${_target}-stage-target)
+RV_STAGE_DEPENDENCY_LIBS(TARGET ${_target} TARGET_LIBS ${_ffmpeg_targets})
 
 SET(RV_DEPS_FFMPEG_VERSION
     ${_version}

@@ -70,8 +70,7 @@ namespace Rv
         return QVariant::List;
     }
 
-    static PyObject* qvariantToPyObject(QVariant::Type type,
-                                        const QVariant& value)
+    static PyObject* qvariantToPyObject(QVariant::Type type, const QVariant& value)
     {
         //
         //  As far as I can tell, all these functions "pass ownership" of a
@@ -114,8 +113,7 @@ namespace Rv
             {
                 QByteArray ba = list[i].toUtf8();
                 const char* s = ba.constData();
-                PyList_SetItem(pylist, i,
-                               PyUnicode_DecodeUTF8(s, strlen(s), "ignore"));
+                PyList_SetItem(pylist, i, PyUnicode_DecodeUTF8(s, strlen(s), "ignore"));
             }
 
             ret = pylist;
@@ -128,8 +126,7 @@ namespace Rv
 
             for (size_t i = 0; i < list.size(); i++)
             {
-                PyList_SetItem(pylist, i,
-                               qvariantToPyObject(list[i].type(), list[i]));
+                PyList_SetItem(pylist, i, qvariantToPyObject(list[i].type(), list[i]));
             }
 
             ret = pylist;
@@ -190,9 +187,8 @@ namespace Rv
         if (!defaultObj || defaultObj == Py_None)
         {
             // THROW EXCEPTION
-            PyErr_SetString(PyExc_Exception,
-                            "readSettings: default return value is None or "
-                            "undefined, but must match setting type");
+            PyErr_SetString(PyExc_Exception, "readSettings: default return value is None or "
+                                             "undefined, but must match setting type");
             return NULL;
         }
         PyObject* ret = defaultObj;
@@ -268,16 +264,14 @@ namespace Rv
         PyEventObject* event;
         PyObject* pylist;
 
-        if (!PyArg_ParseTuple(args, "O!O!", pyEventType(), &event, &PyList_Type,
-                              &pylist))
+        if (!PyArg_ParseTuple(args, "O!O!", pyEventType(), &event, &PyList_Type, &pylist))
         {
             return NULL;
         }
 
         QPoint lp;
 
-        if (const TwkApp::PointerEvent* pevent =
-                dynamic_cast<const TwkApp::PointerEvent*>(event->event))
+        if (const TwkApp::PointerEvent* pevent = dynamic_cast<const TwkApp::PointerEvent*>(event->event))
         {
             lp = QPoint(pevent->x(), rvDoc->view()->height() - pevent->y() - 1);
         }
@@ -424,6 +418,41 @@ namespace Rv
 
 #endif
 
+    static PyObject* consoleWrite(PyObject*, PyObject* args)
+    {
+        PyLockObject locker;
+        const char* message = nullptr;
+        bool foundConsole = false;
+
+        if (!PyArg_ParseTuple(args, "s", &message))
+            return nullptr;
+
+        Py_BEGIN_ALLOW_THREADS;
+
+        if (RvApplication* app = RvApp())
+        {
+            if (RvConsoleWindow* console = app->console())
+            {
+                foundConsole = true;
+                size_t size = strlen(message);
+                console->append(message, size);
+
+                // Invoke processTextBuffer using AutoConnection to automatically
+                // use queued connection if we're not on the main thread
+                QMetaObject::invokeMethod(console, "processTextBuffer", Qt::AutoConnection);
+            }
+        }
+
+        if (!foundConsole)
+        {
+            cout << message;
+        }
+
+        Py_END_ALLOW_THREADS;
+
+        Py_RETURN_NONE;
+    }
+
     static PyMethodDef localmethods[] = {
 
         {"readSettings", readSettings, METH_VARARGS, ""},
@@ -443,6 +472,8 @@ namespace Rv
         {"sessionBottomToolBar", sessionBottomToolBar, METH_NOARGS, ""},
 
         {"javascriptExport", javascriptExport, METH_VARARGS, ""},
+
+        {"consoleWrite", consoleWrite, METH_VARARGS, "Write a message to the RV console window."},
 
         {NULL}};
 

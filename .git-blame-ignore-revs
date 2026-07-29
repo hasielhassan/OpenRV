@@ -1,2 +1,11 @@
 # Format all C++ files with clang-format
 9d6b1be0e431a570d1475ceb4293106669b7c20c
+
+# Lint all Python files with Ruff
+534a7f084f444df93678061a682068f589889737
+
+# Format all Python files with Ruff
+c2f5280d213a71e4b20da0025bfa705bfc7fab1b
+
+# Update clang-format to 140 chars per line
+9fec424bfff02193205d9e2ac18f9ea82f451324

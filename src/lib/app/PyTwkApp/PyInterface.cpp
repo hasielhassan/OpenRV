@@ -20,6 +20,7 @@
 #include <TwkPython/PyLockObject.h>
 #include <Python.h>
 #include <TwkUtil/File.h>
+#include <TwkUtil/CrashHandler.h>
 
 #include <QByteArray>
 // TODO_QT: Remove if everything works.
@@ -63,9 +64,7 @@ namespace TwkApp
                 }
                 else if (obj == Py_None || PyCallable_Check(obj))
                 {
-                    return new Menu::Item(
-                        label,
-                        obj == Py_None ? NULL : new PyFunctionAction(obj));
+                    return new Menu::Item(label, obj == Py_None ? NULL : new PyFunctionAction(obj));
                 }
             }
 
@@ -80,11 +79,9 @@ namespace TwkApp
             PyObject* keyObj;
             PyObject* stateFunc;
 
-            if (PyArg_ParseTuple(t, "sOOO", &label, &actionFunc, &keyObj,
-                                 &stateFunc))
+            if (PyArg_ParseTuple(t, "sOOO", &label, &actionFunc, &keyObj, &stateFunc))
             {
-                if ((actionFunc == Py_None || PyCallable_Check(actionFunc))
-                    && (stateFunc == Py_None || PyCallable_Check(stateFunc)))
+                if ((actionFunc == Py_None || PyCallable_Check(actionFunc)) && (stateFunc == Py_None || PyCallable_Check(stateFunc)))
                 {
                     std::string title = label;
                     std::string key;
@@ -105,18 +102,11 @@ namespace TwkApp
                     }
                     else
                     {
-                        title = std::string("ERROR: ") + title
-                                + std::string(" (Invalid Shortcuts)");
+                        title = std::string("ERROR: ") + title + std::string(" (Invalid Shortcuts)");
                     }
 
-                    return new Menu::Item(
-                        title,
-                        actionFunc == Py_None
-                            ? NULL
-                            : new PyFunctionAction(actionFunc),
-                        key,
-                        stateFunc == Py_None ? NULL
-                                             : new PyStateFunc(stateFunc));
+                    return new Menu::Item(title, actionFunc == Py_None ? NULL : new PyFunctionAction(actionFunc), key,
+                                          stateFunc == Py_None ? NULL : new PyStateFunc(stateFunc));
                 }
             }
 
@@ -165,10 +155,7 @@ namespace TwkApp
         return menu;
     }
 
-    Menu* pyListToMenu(const char* name, void* p)
-    {
-        return listToMenu(name, (PyObject*)p);
-    }
+    Menu* pyListToMenu(const char* name, void* p) { return listToMenu(name, (PyObject*)p); }
 
     namespace
     {
@@ -262,6 +249,53 @@ namespace TwkApp
         PyRun_SimpleString(text);
     }
 
+    //
+    //  Python trace function to capture execution context for crash dumps
+    //
+    static int pythonTraceFunction(PyObject* obj, PyFrameObject* frame, int what, PyObject* arg)
+    {
+        // Track the current Python source location on line events, and clear it
+        // when execution leaves Python for C++ (handled below).
+        if (what == PyTrace_LINE && TwkUtil::CrashHandler::instance().isInitialized())
+        {
+            PyCodeObject* code = PyFrame_GetCode(frame);
+            if (code)
+            {
+                const char* filename = PyUnicode_AsUTF8(code->co_filename);
+                const char* funcname = PyUnicode_AsUTF8(code->co_name);
+                int lineno = PyFrame_GetLineNumber(frame);
+
+                if (filename)
+                {
+                    TwkUtil::CrashHandler::instance().addAnnotation("py_script_file", std::string(filename));
+                    TwkUtil::CrashHandler::instance().addAnnotation("py_script_line", std::to_string(lineno));
+                }
+
+                if (funcname)
+                {
+                    TwkUtil::CrashHandler::instance().addAnnotation("py_function", std::string(funcname));
+                }
+
+                Py_DECREF(code);
+            }
+        }
+        else if (what == PyTrace_RETURN && TwkUtil::CrashHandler::instance().isInitialized())
+        {
+            // When the outermost Python frame returns (no caller frame), control
+            // is leaving Python for C++. Clear the Python context so a later crash
+            // in C++ is not misattributed to a Python line that already returned.
+            PyFrameObject* back = PyFrame_GetBack(frame);
+            if (back == nullptr)
+            {
+                TwkUtil::CrashHandler::instance().addAnnotation("py_script_file", "");
+                TwkUtil::CrashHandler::instance().addAnnotation("py_script_line", "");
+                TwkUtil::CrashHandler::instance().addAnnotation("py_function", "");
+            }
+            Py_XDECREF(back);
+        }
+        return 0;
+    }
+
     void initPython(int argc, char** argv)
     {
         // PreInitialize Python
@@ -310,17 +344,29 @@ namespace TwkApp
         //  Set python3 as multiprocessing executable
         //
 
-        evalPython(
-            ""
-            "import multiprocessing, os, sys\n"
-            "bin_dir, bin_name = os.path.split(sys.executable)\n"
-            "bin_name, bin_ext = os.path.splitext(bin_name)\n"
-            "for python_process in ('python', 'python3', 'py-interp'):\n"
-            "  python_exe = os.path.join(bin_dir, python_process + bin_ext)\n"
-            "  if os.path.exists(python_exe):\n"
-            "    multiprocessing.set_executable(python_exe)\n"
-            "    break\n"
-            "");
+        evalPython(""
+                   "import multiprocessing, os, sys\n"
+                   "bin_dir, bin_name = os.path.split(sys.executable)\n"
+                   "bin_name, bin_ext = os.path.splitext(bin_name)\n"
+                   "for python_process in ('python', 'python3', 'py-interp'):\n"
+                   "  python_exe = os.path.join(bin_dir, python_process + bin_ext)\n"
+                   "  if os.path.exists(python_exe):\n"
+                   "    multiprocessing.set_executable(python_exe)\n"
+                   "    break\n"
+                   "");
+
+        //
+        //  Install the Python trace function for crash-dump context, but only
+        //  when crash reporting is active. Installing a trace hook forces CPython
+        //  off its fast per-line eval path, so gating this avoids imposing that
+        //  overhead when crash dumps are disabled (RV_CRASH_DUMPS_ENABLED=0) or
+        //  the handler failed to initialize.
+        //
+        if (TwkUtil::CrashHandler::instance().isInitialized())
+        {
+            PyLockObject locker;
+            PyEval_SetTrace(pythonTraceFunction, nullptr);
+        }
     }
 
     void finalizePython()
@@ -347,14 +393,12 @@ namespace TwkApp
         {
             PyEventObject* eobj = reinterpret_cast<PyEventObject*>(pobj);
             Mu::Name ename = muContext()->lookupName("Event");
-            const EventType* etype =
-                muContext()->findSymbolOfType<EventType>(ename);
+            const EventType* etype = muContext()->findSymbolOfType<EventType>(ename);
             assert(etype);
 
             if (etype == t)
             {
-                EventType::EventInstance* e =
-                    new EventType::EventInstance(etype);
+                EventType::EventInstance* e = new EventType::EventInstance(etype);
                 e->event = eobj->event;
                 e->document = eobj->document;
                 return e;
@@ -366,14 +410,12 @@ namespace TwkApp
 
             PyEventObject* eobj = reinterpret_cast<PyEventObject*>(pobj);
             Mu::Name ename = muContext()->lookupName("Event");
-            const EventType* etype =
-                muContext()->findSymbolOfType<EventType>(ename);
+            const EventType* etype = muContext()->findSymbolOfType<EventType>(ename);
             assert(etype);
 
             if (etype == t)
             {
-                EventType::EventInstance* e =
-                    new EventType::EventInstance(etype);
+                EventType::EventInstance* e = new EventType::EventInstance(etype);
                 e->event = eobj->event;
                 e->document = eobj->document;
                 return e;
@@ -389,8 +431,7 @@ namespace TwkApp
 
         if (const EventType* etype = dynamic_cast<const EventType*>(t))
         {
-            EventType::EventInstance* obj =
-                reinterpret_cast<EventType::EventInstance*>(muobj);
+            EventType::EventInstance* obj = reinterpret_cast<EventType::EventInstance*>(muobj);
             return PyEventFromEvent(obj->event, obj->document);
         }
 
@@ -420,9 +461,7 @@ namespace TwkApp
         PyLockObject locker;
         if (t == muContext()->symbolType())
         {
-            if (PyMuSymbolObject* o =
-                    (PyMuSymbolObject*)pyMuSymbolType()->tp_alloc(
-                        pyMuSymbolType(), 0))
+            if (PyMuSymbolObject* o = (PyMuSymbolObject*)pyMuSymbolType()->tp_alloc(pyMuSymbolType(), 0))
             {
                 o->symbol = reinterpret_cast<const Mu::Symbol*>(p);
                 o->function = dynamic_cast<const Mu::Function*>(o->symbol);
@@ -441,10 +480,8 @@ namespace TwkApp
         PyMethodDef* d = 0;
         PyLockObject locker;
 
-        Mu::PyModule::addConverterFunctions(convertEventToPy, convertEventToMu,
-                                            0, 0);
-        Mu::PyModule::addConverterFunctions(0, 0, convertSymbolToMuSymbol,
-                                            convertMuSymbolToSymbol);
+        Mu::PyModule::addConverterFunctions(convertEventToPy, convertEventToMu, 0, 0);
+        Mu::PyModule::addConverterFunctions(0, 0, convertSymbolToMuSymbol, convertMuSymbolToSymbol);
 
         if (commands0)
         {
@@ -474,10 +511,10 @@ namespace TwkApp
         if (PyType_Ready(pyEventType()) >= 0)
         {
             Py_XINCREF(pyEventType());
-            PyModule_AddObject(pModule, "Event",
-                               reinterpret_cast<PyObject*>(pyEventType()));
+            PyModule_AddObject(pModule, "Event", reinterpret_cast<PyObject*>(pyEventType()));
         }
 
+        initPyMuSymbolType();
         if (PyType_Ready(pyMuSymbolType()) >= 0)
         {
             Py_XINCREF(pyMuSymbolType());
@@ -491,8 +528,7 @@ namespace TwkApp
         std::ifstream fileSteam(rcfile);
         if (fileSteam.is_open())
         {
-            std::string content((std::istreambuf_iterator<char>(fileSteam)),
-                                (std::istreambuf_iterator<char>()));
+            std::string content((std::istreambuf_iterator<char>(fileSteam)), (std::istreambuf_iterator<char>()));
             PyRun_SimpleString(content.c_str());
         }
 

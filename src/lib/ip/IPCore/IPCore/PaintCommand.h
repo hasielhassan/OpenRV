@@ -71,9 +71,7 @@ namespace IPCore
 
             void setSize(unsigned int s) const;
             void setColor(float, float, float, float) const;
-            std::pair<float, float> computeText(const std::string&,
-                                                std::string&, float space,
-                                                std::string origin) const;
+            std::pair<float, float> computeText(const std::string&, std::string&, float space, std::string origin) const;
             float globalAscenderHeight() const;
             float globalDescenderHeight() const;
 
@@ -86,10 +84,8 @@ namespace IPCore
         class CommandContext
         {
         public:
-            explicit CommandContext(TwkMath::Mat44f pid, TwkMath::Mat44f m,
-                                    const GLFBO* i, const GLFBO* t,
-                                    const GLFBO* c, GLState*& g, bool hasSten,
-                                    TwkMath::Vec4f sten = TwkMath::Vec4f(0.0))
+            explicit CommandContext(TwkMath::Mat44f pid, TwkMath::Mat44f m, const GLFBO* i, const GLFBO* t, const GLFBO* c, GLState*& g,
+                                    bool hasSten, TwkMath::Vec4f sten = TwkMath::Vec4f(0.0), int imgW = 0, int imgH = 0)
             {
                 hasStencil = hasSten;
                 stencilBox = sten;
@@ -99,6 +95,8 @@ namespace IPCore
                 currentTexture = t;
                 currentRender = c;
                 glState = g;
+                imageWidth = imgW;
+                imageHeight = imgH;
             }
 
             ~CommandContext() {}
@@ -112,6 +110,8 @@ namespace IPCore
             const GLFBO* currentTexture;
             const GLFBO* currentRender;
             GLState* glState;
+            int imageWidth;
+            int imageHeight;
         };
 
         class Command
@@ -133,12 +133,18 @@ namespace IPCore
                 PopFrameBuffer,
                 Rectangle,
                 Quad,
-                ExecuteAllBefore
+                ExecuteAllBefore,
+                ShapeRectType,
+                ShapeEllipseType,
+                ShapeArrowType,
+                ShapeLineType
             };
 
             float offset;
             unsigned int version;
             Color color;
+
+            bool frameDependent{false};
 
             virtual void execute(CommandContext& context) const = 0;
             virtual void hash(std::ostream& ostream) const = 0;
@@ -171,9 +177,19 @@ namespace IPCore
                 TessellateMode // each triangle can have its own color
             };
 
-            explicit PolyLine(const Vec2* vector2d = nullptr,
-                              size_t npoints = 0, float width = 0,
-                              Color color = Color(0.0), bool ownPoints = false)
+            // Blend mode for stamp brushes — resolved from the brush catalogue
+            // by BrushTextureManager and stored here so PaintCommand::execute()
+            // can set the correct glBlendFunc without inspecting the brush name.
+            enum StampBlendMode
+            {
+                BlendNormal,   ///< GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+                BlendMarker,   ///< marker wetness approximation (same GL blend as Normal)
+                BlendAdditive, ///< glow: GL_SRC_ALPHA, GL_ONE
+                BlendEraser    ///< reserved; stamp erasure not yet implemented
+            };
+
+            explicit PolyLine(const Vec2* vector2d = nullptr, size_t npoints = 0, float width = 0, Color color = Color(0.0),
+                              bool ownPoints = false)
                 : npoints(npoints)
                 , width(width)
                 , smoothingWidth(1.0)
@@ -213,8 +229,7 @@ namespace IPCore
                 if (polyLine.npoints > 0)
                 {
                     npoints = polyLine.npoints;
-                    points.assign(polyLine.points.begin(),
-                                  polyLine.points.end());
+                    points.assign(polyLine.points.begin(), polyLine.points.end());
                 }
                 else
                 {
@@ -224,8 +239,7 @@ namespace IPCore
 
                 if (polyLine.width != 0.0f)
                 {
-                    widths.assign(polyLine.widths.begin(),
-                                  polyLine.widths.end());
+                    widths.assign(polyLine.widths.begin(), polyLine.widths.end());
                 }
                 else
                 {
@@ -249,6 +263,11 @@ namespace IPCore
             Mode mode;
             int debug;
             bool ownPoints;
+
+            // Resolved from the brush catalogue at stroke-creation time.
+            StampBlendMode stampBlendMode{BlendNormal};
+            bool stampSoftShader{false};
+            unsigned int stampTexture{0}; ///< GL texture name; 0 = procedural
 
             mutable HashValue idhash;
 
@@ -278,8 +297,7 @@ namespace IPCore
         class Text : public Command
         {
         public:
-            explicit Text(const std::string& /*str*/ = "",
-                          const std::string& /*fnt*/ = "", float ptsze = 1.0,
+            explicit Text(const std::string& /*str*/ = "", const std::string& /*fnt*/ = "", float ptsze = 1.0,
                           Color color = Color(1, 1, 1, 1))
                 : ptsize(ptsze)
                 , scale(1.0)
@@ -330,8 +348,7 @@ namespace IPCore
         class Rectangle : public Command
         {
         public:
-            explicit Rectangle(float height = 0, float width = 0,
-                               Color color = Color(0, 0, 0, 1.0))
+            explicit Rectangle(float height = 0, float width = 0, Color color = Color(0, 0, 0, 1.0))
                 : height(height)
                 , width(width)
                 , pos(0, 0)
@@ -385,6 +402,82 @@ namespace IPCore
 
             void execute(CommandContext& context) const override;
             void hash(std::ostream& ostream) const override;
+            [[nodiscard]] size_t getType() const override;
+        };
+
+        // ── Shape commands ───────────────────────────────────────────
+        // Rendered via bounding-box quad + SDF GLSL shaders loaded from
+        // the twkpaint-src submodule (assets/shaders/).
+
+        /// Axis-aligned rectangle.
+        class ShapeRect : public Command
+        {
+        public:
+            ShapeRect() = default;
+            ShapeRect(const ShapeRect&) = default;
+
+            Vec2 min{0.0f, 0.0f};
+            Vec2 max{0.1f, 0.1f};
+            Color innerColor{0.0f, 0.0f, 0.0f, 0.0f};
+            Color borderColor{1.0f, 1.0f, 1.0f, 1.0f};
+            float borderWidth{0.002f};
+
+            void execute(CommandContext& context) const override;
+            void hash(std::ostream& o) const override;
+            [[nodiscard]] size_t getType() const override;
+        };
+
+        /// Axis-aligned ellipse.
+        class ShapeEllipse : public Command
+        {
+        public:
+            ShapeEllipse() = default;
+            ShapeEllipse(const ShapeEllipse&) = default;
+
+            Vec2 min{0.0f, 0.0f};
+            Vec2 max{0.1f, 0.1f};
+            Color innerColor{0.0f, 0.0f, 0.0f, 0.0f};
+            Color borderColor{1.0f, 1.0f, 1.0f, 1.0f};
+            float borderWidth{0.002f};
+
+            void execute(CommandContext& context) const override;
+            void hash(std::ostream& o) const override;
+            [[nodiscard]] size_t getType() const override;
+        };
+
+        /// Arrow with filled shaft and arrowhead at endPos.
+        class ShapeArrow : public Command
+        {
+        public:
+            ShapeArrow() = default;
+            ShapeArrow(const ShapeArrow&) = default;
+
+            Vec2 startPos{0.0f, 0.0f};
+            Vec2 endPos{0.1f, 0.0f};
+            Color innerColor{1.0f, 1.0f, 1.0f, 1.0f};
+            Color borderColor{1.0f, 1.0f, 1.0f, 1.0f};
+            float thickness{0.005f};
+            float borderWidth{0.001f};
+
+            void execute(CommandContext& context) const override;
+            void hash(std::ostream& o) const override;
+            [[nodiscard]] size_t getType() const override;
+        };
+
+        /// Straight line with no arrowhead.
+        class ShapeLine : public Command
+        {
+        public:
+            ShapeLine() = default;
+            ShapeLine(const ShapeLine&) = default;
+
+            Vec2 startPos{0.0f, 0.0f};
+            Vec2 endPos{0.1f, 0.0f};
+            Color borderColor{1.0f, 1.0f, 1.0f, 1.0f};
+            float borderWidth{0.002f};
+
+            void execute(CommandContext& context) const override;
+            void hash(std::ostream& o) const override;
             [[nodiscard]] size_t getType() const override;
         };
 

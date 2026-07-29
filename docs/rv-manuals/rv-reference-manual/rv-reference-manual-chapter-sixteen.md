@@ -184,7 +184,7 @@ This node is used to alter geometry or color depth of an image source. It is par
 | uncrop.height | int | 1 | Height of uncropped image space |
 | color.maxBitDepth | int | 1 | One of 8, 16, or 32 indicating the maximum allowed bit depth (for either float or integer pixels) |
 | color.allowFloatingPoint | int | 1 | If non-0 floating point images will be allowed on the GPU otherwise, the image will be converted to integer of the same bit depth (or the maximum bit depth). |
-|  |  |  |  |
+| | | | |
 
 ## RVImageSource
 
@@ -237,7 +237,7 @@ This node handles the pixel aspect ratio of a source group. The lens warp node c
 | Name | Type | Size | Description |
 | --- | --- | --- | --- |
 | warp.pixelAspectRatio | float | 1 | If non-0 set the pixel aspect ratio. Otherwise use the pixel aspect ratio reported by the incoming image. (default 0, ignored) |
-| warp.model | string |  | Lens model: choices are “brown”, “opencv”, “pfbarrel”, “adobe”, “3de4_anamorphic_degree_6, “rv4.0.10”. |
+| warp.model | string | | Lens model: choices are “brown”, “opencv”, “pfbarrel”, “adobe”, “3de4_anamorphic_degree_6, “rv4.0.10”. |
 | warp.k1 | float | 1 | Radial coefficient for r^2 (default 0.0)Applicable to “brown”, “opencv”, “pfbarrel”, “adobe”. |
 | warp.k2 | float | 1 | Radial coefficient for r^4 (default 0.0)Applicable to “brown”, “opencv”, “pfbarrel”, “adobe”. |
 | warp.k3 | float | 1 | Radial coefficient for r^6 (default 0.0)Applicable to “brown”, “opencv”, “adobe”. |
@@ -439,7 +439,7 @@ Paint nodes are used primarily to store per frame annotations. Below *id* is the
 | pen: *id* : *frame* : *user* .debug | int | 1 | If 1 show multicolored bounding lines around the stroke. |
 | pen: *id* : *frame* : *user* .join | int | 1 | The joining style of the stroke:NoJoin = 0; BevelJoin = 1; MiterJoin = 2; RoundJoin = 3; |
 | pen: *id* : *frame* : *user* .cap | int | 1 | The cap style of the stroke:NoCap = 0; SquareCap = 1; RoundCap = 2; |
-| pen: *id* : *frame* : *user* .splat | int | 1 |  |
+| pen: *id* : *frame* : *user* .splat | int | 1 | |
 | pen: *id* : *frame* : *user* .mode | int | 1 | Drawing mode of the stroke (Default if missing is 0):RenderOverMode = 0; RenderEraseMode = 1; |
 | pen: *id* : *frame* : *user* .startFrame | int | 1 | The first frame on which the pen stroke should be displayed |
 | pen: *id* : *frame* : *user* .duration | int | 1 | The number of frames on which the pen stroke should be displayed |
@@ -610,7 +610,7 @@ The stack node is part of a stack group and handles control for settings like co
 | output.size | int[2] | 1 | The virtual output size of the stack. This may not match the input sizes. |
 | output.autoSize | int | 1 | Figure out a good size automatically from the input sizes if 1. Otherwise use output.size. |
 | output.chosenAudioInput | string | 1 | Name of input which becomes the audio output of the stack. If the value is .all. then all inputs are mixed. If the value is .first. then the first input is used. |
-| composite.type | string | 1 | The compositing operation to perform on the inputs. Valid values are: over, add, difference, -difference, and replace |
+| composite.type | string | 1 | The compositing operation to perform on the inputs. Valid values are: over, add, dissolve, difference, -difference, replace, and topmost |
 | mode.useCutInfo | int | 1 | Use cut information on the inputs to determine EDL timing. |
 | mode.strictFrameRanges | int | 1 | If 1 match the timeline frames to the source frames instead of retiming to frame 1. |
 | mode.alignStartFrames | int | 1 | If 1 offset all inputs so they start at same frame as the first input. |

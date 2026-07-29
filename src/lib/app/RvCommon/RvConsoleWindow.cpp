@@ -20,8 +20,7 @@ namespace
     //
     bool stringPotentiallyContainsHtml(const std::string& s)
     {
-        return !s.empty() && s.find('<') != std::string::npos
-               && s.find('>') != std::string::npos;
+        return !s.empty() && s.find('<') != std::string::npos && s.find('>') != std::string::npos;
     }
 } // namespace
 
@@ -85,14 +84,11 @@ namespace Rv
         m_processTimer = new QTimer(this);
         m_processTimer->setSingleShot(true);
         m_processTimer->setInterval(500);
-        connect(m_processTimer, SIGNAL(timeout()), this,
-                SLOT(processTextBuffer()));
+        connect(m_processTimer, SIGNAL(timeout()), this, SLOT(processTextBuffer()));
 
         m_ui.setupUi(this);
-        m_ui.biggerButton->setIcon(
-            colorAdjustedIcon(":images/zoomi_32x32.png"));
-        m_ui.smallerButton->setIcon(
-            colorAdjustedIcon(":images/zoomo_32x32.png"));
+        m_ui.biggerButton->setIcon(colorAdjustedIcon(":images/zoomi_32x32.png"));
+        m_ui.smallerButton->setIcon(colorAdjustedIcon(":images/zoomo_32x32.png"));
         m_ui.clearButton->setIcon(colorAdjustedIcon(":images/del_32x32.png"));
         m_ui.textEdit->setReadOnly(true);
         //
@@ -103,8 +99,7 @@ namespace Rv
         m_ui.showComboBox->setFocus();
 
         setWindowTitle(UI_APPLICATION_NAME " Console");
-        setWindowIcon(
-            QIcon(qApp->applicationDirPath() + QString(RV_ICON_PATH_SUFFIX)));
+        setWindowIcon(QIcon(qApp->applicationDirPath() + QString(RV_ICON_PATH_SUFFIX)));
         setSizeGripEnabled(true);
         bool doRedirect = (getenv("RV_NO_CONSOLE_REDIRECT") == 0);
         // setAttribute(Qt::WA_MacBrushedMetal);
@@ -124,7 +119,6 @@ namespace Rv
             m_cerr = new ostream(m_stderrBuf);
         }
 #endif
-
         RV_QSETTINGS;
 
         settings.beginGroup("Console");
@@ -164,7 +158,7 @@ namespace Rv
         }
     }
 
-    void RvConsoleWindow::closeEvent(QCloseEvent* event)
+    void RvConsoleWindow::saveSettings()
     {
         int showIndex = m_ui.showComboBox->currentIndex();
 
@@ -174,8 +168,18 @@ namespace Rv
         settings.setValue("showOn", showIndex);
         settings.endGroup();
         settings.sync();
+    }
 
+    void RvConsoleWindow::closeEvent(QCloseEvent* event)
+    {
+        saveSettings();
         QWidget::closeEvent(event);
+    }
+
+    void RvConsoleWindow::done(int result)
+    {
+        saveSettings();
+        QDialog::done(result);
     }
 
     int RvConsoleWindow::append(const char* text, size_t n)
@@ -203,17 +207,24 @@ namespace Rv
 
     void RvConsoleWindow::processTextBuffer()
     {
-        if (!m_textBuffer.str().empty())
+        std::string text;
+        {
+            QMutexLocker l(&m_lock);
+            text = m_textBuffer.str();
+            m_textBuffer.str("");
+        }
+
+        if (!text.empty())
         {
             vector<string> lines;
-            stl_ext::tokenize(lines, m_textBuffer.str(), "\n\r");
+            stl_ext::tokenize(lines, text, "\n\r");
 
             bool shouldShow = false;
 
             textEdit()->moveCursor(QTextCursor::End, QTextCursor::MoveAnchor);
 
             // QTextEdit::insertHtml() is slow so we use it only when necessary
-            if (stringPotentiallyContainsHtml(m_textBuffer.str()))
+            if (stringPotentiallyContainsHtml(text))
             {
                 QString html;
 
@@ -240,8 +251,6 @@ namespace Rv
                 show();
                 raise();
             }
-
-            m_textBuffer.str("");
         }
 
         if (m_processTimerRunning)
@@ -271,10 +280,8 @@ namespace Rv
 
     bool RvConsoleWindow::processLine(string& line, QString& html)
     {
-        bool qtimerwarning =
-            line.find("Application asked to unregister timer") != string::npos;
-        bool qfilesystemwatcher =
-            line.find("QFileSystemWatcher:") != string::npos;
+        bool qtimerwarning = line.find("Application asked to unregister timer") != string::npos;
+        bool qfilesystemwatcher = line.find("QFileSystemWatcher:") != string::npos;
 
         // filter this
         if (qtimerwarning || qfilesystemwatcher)
@@ -288,31 +295,35 @@ namespace Rv
             lineLogLevel = spdlog::level::err;
             line.erase(0, 6);
             out = m_cerr;
-            *out << "ERROR: ";
+            if (out)
+                *out << "ERROR: ";
         }
         else if (line.find("WARNING:") == 0)
         {
             lineLogLevel = spdlog::level::warn;
             line.erase(0, 8);
             out = m_cerr;
-            *out << "WARNING: ";
+            if (out)
+                *out << "WARNING: ";
         }
         else if (line.find("INFO:") == 0)
         {
             lineLogLevel = spdlog::level::info;
             line.erase(0, 5);
-            *out << "INFO: ";
+            if (out)
+                *out << "INFO: ";
         }
         else if (line.find("DEBUG:") == 0)
         {
             lineLogLevel = spdlog::level::debug;
             line.erase(0, 6);
-            *out << "DEBUG: ";
+            if (out)
+                *out << "DEBUG: ";
         }
 
         // We removed the message type from the line, let's make sure
         // that we also remove the space between the type and the line
-        if (std::isspace(line.at(0)))
+        if (!line.empty() && std::isspace(line.at(0)))
         {
             line.erase(0, 1);
         }
@@ -338,7 +349,8 @@ namespace Rv
         m_fileLogger.logToFile(lineLogLevel, line);
         if (line.size() && line[0] != '<')
         {
-            *out << line;
+            if (out)
+                *out << line;
             html += "<br>";
         }
 
@@ -349,19 +361,14 @@ namespace Rv
         //
         return (showIndex != 4
                 && ((lineLogLevel == spdlog::level::err && showIndex <= 3)
-                    || (lineLogLevel == spdlog::level::warn && showIndex <= 3
-                        && showIndex >= 1)
-                    || (lineLogLevel == spdlog::level::info && showIndex <= 3
-                        && showIndex >= 2)
-                    || showIndex == 3));
+                    || (lineLogLevel == spdlog::level::warn && showIndex <= 3 && showIndex >= 1)
+                    || (lineLogLevel == spdlog::level::info && showIndex <= 3 && showIndex >= 2) || showIndex == 3));
     }
 
     bool RvConsoleWindow::processAndDisplayLine(string& line)
     {
-        bool qtimerwarning =
-            line.find("Application asked to unregister timer") != string::npos;
-        bool qfilesystemwatcher =
-            line.find("QFileSystemWatcher:") != string::npos;
+        bool qtimerwarning = line.find("Application asked to unregister timer") != string::npos;
+        bool qfilesystemwatcher = line.find("QFileSystemWatcher:") != string::npos;
 
         // filter this
         if (qtimerwarning || qfilesystemwatcher)
@@ -377,7 +384,8 @@ namespace Rv
             textEdit()->insertPlainText("ERROR: ");
             line.erase(0, 6);
             out = m_cerr;
-            *out << "ERROR: ";
+            if (out)
+                *out << "ERROR: ";
             lineLogLevel = spdlog::level::err;
         }
         else if (line.find("WARNING:") == 0)
@@ -387,7 +395,8 @@ namespace Rv
             textEdit()->insertPlainText("WARNING: ");
             line.erase(0, 8);
             out = m_cerr;
-            *out << "WARNING: ";
+            if (out)
+                *out << "WARNING: ";
             lineLogLevel = spdlog::level::warn;
         }
         else if (line.find("INFO:") == 0)
@@ -395,7 +404,8 @@ namespace Rv
             textEdit()->setTextColor(Qt::cyan);
             textEdit()->insertPlainText("INFO: ");
             line.erase(0, 5);
-            *out << "INFO: ";
+            if (out)
+                *out << "INFO: ";
             lineLogLevel = spdlog::level::info;
         }
         else if (line.find("DEBUG:") == 0)
@@ -403,20 +413,22 @@ namespace Rv
             textEdit()->setTextColor(Qt::green);
             textEdit()->insertPlainText("DEBUG: ");
             line.erase(0, 6);
-            *out << "DEBUG: ";
+            if (out)
+                *out << "DEBUG: ";
             lineLogLevel = spdlog::level::debug;
         }
 
         // We removed the message type from the line, let's make sure
         // that we also remove the space between the type and the line
-        if (std::isspace(line.at(0)))
+        if (!line.empty() && std::isspace(line.at(0)))
         {
             line.erase(0, 1);
         }
 
         textEdit()->setTextColor(Qt::white);
         textEdit()->insertPlainText(line.c_str());
-        *out << line;
+        if (out)
+            *out << line;
         m_fileLogger.logToFile(lineLogLevel, line);
 
         int showIndex = m_ui.showComboBox->currentIndex();
@@ -426,11 +438,8 @@ namespace Rv
         //
         return (showIndex != 4
                 && ((lineLogLevel == spdlog::level::err && showIndex <= 3)
-                    || (lineLogLevel == spdlog::level::warn && showIndex <= 3
-                        && showIndex >= 1)
-                    || (lineLogLevel == spdlog::level::info && showIndex <= 3
-                        && showIndex >= 2)
-                    || showIndex == 3));
+                    || (lineLogLevel == spdlog::level::warn && showIndex <= 3 && showIndex >= 1)
+                    || (lineLogLevel == spdlog::level::info && showIndex <= 3 && showIndex >= 2) || showIndex == 3));
     }
 
 } // namespace Rv

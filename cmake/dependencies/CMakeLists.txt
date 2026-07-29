@@ -6,7 +6,43 @@
 
 INCLUDE(rv_create_std_deps_vars)
 INCLUDE(rv_make_std_lib_name)
-INCLUDE(rv_copy_lib_bin_folders)
+INCLUDE(rv_stage_dependency_libs)
+INCLUDE(rv_add_imported_library)
+INCLUDE(rv_find_dependency)
+
+# All imported targets created by find_package() are automatically GLOBAL, so subdirectories can reference them without manual promotion.
+SET(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL
+    TRUE
+)
+
+# Conan's CMakeDeps only sets IMPORTED_LOCATION_<CONFIG> for the single build_type used during `conan install`. On multi-config generators (MSVC), CMake
+# validates ALL configurations in CMAKE_CONFIGURATION_TYPES at generation time. Any config Conan didn't provide would error with "IMPORTED_LOCATION not set for
+# imported target ... configuration <X>". Map every config that Conan didn't provide to the one it did, so imported targets always resolve.
+IF(RV_CONAN_CMAKE_PREFIX_PATH
+   AND MSVC
+)
+  STRING(TOUPPER "${CMAKE_BUILD_TYPE}" _conan_config_upper)
+  FOREACH(
+    _cfg
+    DEBUG RELEASE RELWITHDEBINFO MINSIZEREL
+  )
+    IF(NOT _cfg STREQUAL _conan_config_upper)
+      SET(CMAKE_MAP_IMPORTED_CONFIG_${_cfg}
+          ${CMAKE_BUILD_TYPE} ""
+      )
+    ENDIF()
+  ENDFOREACH()
+ENDIF()
+
+# Snapshot the user's CMAKE_PREFIX_PATH before Qt adds ~150 component cmake dirs. ExternalProject sub-builds (OIIO, OCIO, OpenEXR) use this clean list to find
+# transitive dependencies without Qt noise.
+SET(RV_DEPS_CMAKE_PREFIX_PATH
+    "${CMAKE_PREFIX_PATH}"
+    CACHE INTERNAL "User's CMAKE_PREFIX_PATH before Qt additions"
+)
+
+INCLUDE(ProcessorCount)
+PROCESSORCOUNT(_cpu_count)
 
 IF(NOT TARGET dependencies)
   ADD_CUSTOM_TARGET(dependencies)
@@ -47,9 +83,9 @@ IF(RV_TARGET_WINDOWS)
 ENDIF()
 
 # TODO_QT: Not generic enough.. But maybe we could use something like NOT CY2023 since after 2023, it is Qt6
-IF(RV_VFX_PLATFORM STREQUAL CY2023)
+IF(RV_VFX_PLATFORM STREQUAL "CY2023")
   INCLUDE(qt5)
-ELSEIF(RV_VFX_PLATFORM STREQUAL CY2024)
+ELSEIF(RV_VFX_PLATFORM STRGREATER_EQUAL "CY2024")
   INCLUDE(qt6)
 ENDIF()
 
@@ -84,6 +120,9 @@ INCLUDE(openjpeg) # depends on zlib, tiff, png
 INCLUDE(openjph)
 INCLUDE(webp)
 INCLUDE(openexr)
+IF(RV_DEPS_OPENEXR_FOUND)
+  INCLUDE(libdeflate)
+ENDIF()
 INCLUDE(ocio)
 # src/pub: freetype: src/pub will be removed eventually, this path will needed to change.
 ADD_SUBDIRECTORY(../../src/pub/freetype src/pub/freetype) # required by oiio
@@ -95,7 +134,12 @@ INCLUDE(yaml-cpp) # depends on OCIO
 
 INCLUDE(bmd.cmake)
 INCLUDE(spdlog)
+INCLUDE(crashpad)
+IF(NOT RV_TARGET_WINDOWS)
+  INCLUDE(breakpad)
+ENDIF()
 INCLUDE(aja.cmake)
+INCLUDE(prores.cmake)
 
 LIST(REMOVE_DUPLICATES RV_DEPS_LIST)
 SET(RV_DEPS_LIST
@@ -107,6 +151,9 @@ MESSAGE(STATUS "Using AJA:          ${RV_DEPS_AJA_VERSION}")
 MESSAGE(STATUS "Using atomic_ops:   ${RV_DEPS_ATOMIC_OPS_VERSION}")
 IF(RV_DEPS_BMD_VERSION)
   MESSAGE(STATUS "Using BMD:          ${RV_DEPS_BMD_VERSION}")
+ENDIF()
+IF(RV_DEPS_APPLE_PRORES_VERSION)
+  MESSAGE(STATUS "Using Apple ProRes: ${RV_DEPS_APPLE_PRORES_VERSION}")
 ENDIF()
 MESSAGE(STATUS "Using Boost:        ${RV_DEPS_BOOST_VERSION}")
 MESSAGE(STATUS "Using Dav1d:        ${RV_DEPS_DAV1D_VERSION}")
@@ -133,16 +180,14 @@ IF(RV_TARGET_WINDOWS)
 ENDIF()
 MESSAGE(STATUS "Using PNG:          ${RV_DEPS_PNG_VERSION}")
 MESSAGE(STATUS "Using Python3:      ${RV_DEPS_PYTHON3_VERSION}")
-
-RV_VFX_SET_VARIABLE(_rv_deps_pyside_version CY2023 "Using PySide2:      ${RV_DEPS_PYSIDE_VERSION}" CY2024 "Using PySide6:      ${RV_DEPS_PYSIDE_VERSION}")
-MESSAGE(STATUS "${_rv_deps_pyside_version}")
-
-RV_VFX_SET_VARIABLE(_rv_deps_qt_version CY2023 "Using Qt5:          ${RV_DEPS_QT5_VERSION}" CY2024 "Using Qt6:          ${RV_DEPS_QT6_VERSION}")
-MESSAGE(STATUS "${_rv_deps_qt_version}")
-
+MESSAGE(STATUS "Using PySide:       ${RV_DEPS_PYSIDE_VERSION}")
+MESSAGE(STATUS "Using Qt:           ${RV_DEPS_QT_VERSION}")
 MESSAGE(STATUS "Using Raw:          ${RV_DEPS_RAW_VERSION}")
 MESSAGE(STATUS "Using Tiff:         ${RV_DEPS_TIFF_VERSION}")
 MESSAGE(STATUS "Using WebP:         ${RV_DEPS_WEBP_VERSION}")
 MESSAGE(STATUS "Using Yaml-CPP:     ${RV_DEPS_YAML_CPP_VERSION} (Using OCIO's own copy)")
 MESSAGE(STATUS "Using zlib:         ${RV_DEPS_ZLIB_VERSION}")
 MESSAGE(STATUS "Using spdlog:       ${RV_DEPS_SPDLOG_VERSION}")
+IF(RV_DEPS_BREAKPAD_VERSION)
+  MESSAGE(STATUS "Using Breakpad:     ${RV_DEPS_BREAKPAD_VERSION}")
+ENDIF()

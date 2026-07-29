@@ -310,7 +310,7 @@ SET_PROPERTY(
 
 ADD_CUSTOM_COMMAND(
   OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy.cpp
-  COMMAND ${RV_DEPS_QT6_LOCATION}/bin/moc -I ${CMAKE_CURRENT_SOURCE_DIR} -o ${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy.cpp
+  COMMAND ${RV_DEPS_QT_LOCATION}/bin/moc -I ${CMAKE_CURRENT_SOURCE_DIR} -o ${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/${_target}/SignalSpy.h
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/SignalSpy.cpp
   COMMENT "Generating SignalSpy moc file ..."
@@ -321,8 +321,9 @@ ADD_CUSTOM_COMMAND(
   OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy_filtered.hpp
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy.cpp
   COMMAND
-    bash -c
-    "sed -f ${CMAKE_CURRENT_SOURCE_DIR}/signalspy.sed ${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy.cpp >${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy_filtered.hpp"
+    ${CMAKE_COMMAND} -DINPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy.cpp
+    -DOUTPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${_target}/generated/moc_SignalSpy_filtered.hpp -DSED_FILE=${CMAKE_CURRENT_SOURCE_DIR}/signalspy.sed -P
+    ${PROJECT_SOURCE_DIR}/cmake/scripts/apply_sed_filter.cmake
   COMMENT "Patching the moc_SignalSpy.cpp file ..."
 )
 

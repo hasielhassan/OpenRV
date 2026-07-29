@@ -83,6 +83,19 @@ jobs:
           python-version: ${{ matrix.python-version }}
           vfx-platform: ${{ matrix.vfx-platform }}
           extra_repo: ${{ matrix.extra_repo }}
+      - name: Clear up space for artifact packaging
+        run: |
+          rm -rf _build || true
+        shell: bash
+      - name: Package Linux Build Artifacts
+        run: |
+          tar -czf OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.tar.gz -C _install .
+        shell: bash
+      - name: Upload Linux Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.vfx-platform }}-${{ matrix.build-type }}
+          path: OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.tar.gz
 
   # CY2025 Debug — runs when cmake files change or on full matrix
   rocky-linux-debug:
@@ -245,3 +258,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
           vfx-platform: ${{ matrix.vfx-platform }}
           extra_repo: ${{ matrix.extra_repo }}
+      - name: Clear up space for artifact packaging
+        run: |
+          rm -rf _build || true
+        shell: bash
+      - name: Package Linux Build Artifacts
+        run: |
+          tar -czf OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.tar.gz -C _install .
+        shell: bash
+      - name: Upload Linux Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.vfx-platform }}-${{ matrix.build-type }}
+          path: OpenRV-Rocky${{ matrix.rocky-version }}-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.tar.gz

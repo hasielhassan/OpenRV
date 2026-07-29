@@ -56,6 +56,15 @@ jobs:
           vfx-platform: ${{ matrix.vfx-platform }}
           msvc-component: ${{ matrix.msvc-component }}
           msvc-compiler: ${{ matrix.msvc-compiler }}
+      - name: Package Windows Build Artifacts
+        shell: msys2 {0}
+        run: |
+          zip -r OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip _install/
+      - name: Upload Windows Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}
+          path: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip
 
   # CY2025 Debug — runs when cmake files change or on full matrix
   windows-debug:
@@ -153,3 +162,12 @@ jobs:
           vfx-platform: ${{ matrix.vfx-platform }}
           msvc-component: ${{ matrix.msvc-component }}
           msvc-compiler: ${{ matrix.msvc-compiler }}
+      - name: Package Windows Build Artifacts
+        shell: msys2 {0}
+        run: |
+          zip -r OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip _install/
+      - name: Upload Windows Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}
+          path: OpenRV-Windows-${{ matrix.vfx-platform }}-${{ matrix.build-type }}.zip
